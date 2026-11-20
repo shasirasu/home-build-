@@ -1,0 +1,147 @@
+@import 'tailwindcss';
+
+/* Archivo (variable: weight 100–900, width 62–125), served from this site so nothing loads from elsewhere. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('/fonts/archivo-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('/fonts/archivo-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* Ink on drawing paper, with the plan's own red dimension-line colour as the one accent. */
+:root {
+  --background: #f3f3f1;
+  --foreground: #161616;
+  --surface: #ffffff;
+  --surface-2: #ebebe8;
+  --surface-3: #e0e0dc;
+  --muted-foreground: #5d5d58;
+  --border: #d9d9d4;
+  --border-strong: #b9b9b2;
+  --primary: #c8301f;
+  --primary-hover: #a92616;
+  --primary-foreground: #ffffff;
+  --primary-soft: #f6e1dd;
+  --ring: #c8301f;
+  --success: #2f7a4a;
+  --warning: #9a6a0a;
+  --overlay: rgb(22 22 22 / 0.42);
+  --shadow-color: 30 30 25;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --background: #121212;
+  --foreground: #ededea;
+  --surface: #1b1b1a;
+  --surface-2: #242423;
+  --surface-3: #2e2e2c;
+  --muted-foreground: #a3a39c;
+  --border: #31312f;
+  --border-strong: #4a4a46;
+  --primary: #ef4f3b;
+  --primary-hover: #ff6a56;
+  --primary-foreground: #160806;
+  --primary-soft: #3a1c17;
+  --ring: #ef4f3b;
+  --success: #5fbf82;
+  --warning: #e0b04a;
+  --overlay: rgb(0 0 0 / 0.55);
+  --shadow-color: 0 0 0;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --shadow-panel: 0 1px 2px rgb(var(--shadow-color) / 0.06), 0 8px 24px -8px rgb(var(--shadow-color) / 0.18);
+  --shadow-pop: 0 2px 4px rgb(var(--shadow-color) / 0.08), 0 18px 40px -12px rgb(var(--shadow-color) / 0.32);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-variation-settings: 'wdth' 100;
+  }
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  input,
+  textarea {
+    caret-color: var(--primary);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  a {
+    text-underline-offset: 3px;
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .wide {
+    font-variation-settings: 'wdth' 125;
+  }
+  .narrow {
+    font-variation-settings: 'wdth' 82;
+  }
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Furniture gallery · Home Build 3D</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #efece6; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #2b2a28; }
+      #app { position: fixed; inset: 0; }
+      #hud { position: fixed; left: 12px; top: 10px; font-size: 12px; line-height: 1.45; background: rgba(255, 255, 255, 0.82); padding: 8px 11px; border-radius: 8px; max-width: 560px; pointer-events: none; white-space: pre-wrap; }
+      #nav { position: fixed; right: 12px; top: 10px; font-size: 12px; background: rgba(255, 255, 255, 0.82); padding: 6px 9px; border-radius: 8px; max-width: 46vw; }
+      #nav a { color: #7a4b2a; text-decoration: none; margin: 0 4px; white-space: nowrap; }
+      #nav a:hover { text-decoration: underline; }
+      .tile { position: fixed; font-size: 12px; padding: 5px 8px; pointer-events: none; box-sizing: border-box; border: 1px solid rgba(0, 0, 0, 0.08); }
+      .tile b { font-size: 13px; }
+      .tile .bad { color: #b3261e; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud"></div>
+    <div id="nav"></div>
+    <script type="module" src="/src/three/furniture/gallery.ts"></script>
+  </body>
+</html>
