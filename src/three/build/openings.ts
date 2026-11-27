@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { Batch, BatchSet } from '../core/batch';
 import { orectFromSeg, orectsOverlap, type ORect } from '../core/geo';
+import { accentMaterial } from './facade';
 import { roomAt, wallPoint, type LevelModel, type OpeningModel } from './model';
 import { wallMatrix, type BuildCtx } from './walls';
 
@@ -64,7 +65,7 @@ export function solveDoorAngles(leaves: DoorLeaf[], obstaclesFor: (leaf: DoorLea
 }
 
 export function buildOpenings(ctx: BuildCtx, lm: LevelModel, finishGroup: THREE.Group, proxies: THREE.Object3D[]): DoorLeaf[] {
-  const { mats } = ctx;
+  const { mats, facade } = ctx;
   const set = new BatchSet();
   const leaves: DoorLeaf[] = [];
   const glass = mats.glass();
@@ -119,10 +120,16 @@ export function buildOpenings(ctx: BuildCtx, lm: LevelModel, finishGroup: THREE.
           const sheltered = !!roomAt(lm, ox, oy);
           if (!sheltered && om.head < wm.height - 0.12) {
             const proj = kind === 'door' ? 0.6 : kind === 'ventilator' ? 0.3 : 0.45;
-            const b = set.get(trim);
-            b.box(M, 0, om.head + 0.0375, om.outSide * (t / 2 + proj / 2), W + 0.3, 0.075, proj, -1, om.outSide > 0 ? 'z-' : 'z+');
-            // a thin drip edge so the slab reads as a chajja, not a block
-            b.box(M, 0, om.head - 0.012, om.outSide * (t / 2 + proj - 0.02), W + 0.3, 0.024, 0.04);
+            if (facade.traditional) {
+              const b = set.get(trim);
+              b.box(M, 0, om.head + 0.0375, om.outSide * (t / 2 + proj / 2), W + 0.3, 0.075, proj, -1, om.outSide > 0 ? 'z-' : 'z+');
+              // a thin drip edge so the slab reads as a chajja, not a block
+              b.box(M, 0, om.head - 0.012, om.outSide * (t / 2 + proj - 0.02), W + 0.3, 0.024, 0.04);
+            } else if (kind === 'door' && !(om === facade.mainDoor && facade.design.canopy)) {
+              // the modern styles shade their windows with the box or hood of the design (build/facade.ts); a door
+              // that has no canopy of its own still gets a thin flat hood
+              set.get(accentMaterial(facade, mats, true)).box(M, 0, om.head + 0.08, om.outSide * (t / 2 + proj / 2), W + 0.3, 0.05, proj, -1, om.outSide > 0 ? 'z-' : 'z+');
+            }
           }
         }
       } catch (e) {
@@ -379,9 +386,12 @@ export function buildOpenings(ctx: BuildCtx, lm: LevelModel, finishGroup: THREE.
     const depth = Math.abs(zWall - zInnerFrame);
     if (depth > 0.01) g.box(M, 0, om.sill + 0.01, (zWall + zInnerFrame) / 2, W - 0.002, 0.02, depth, -1, 'y-');
     g.box(M, 0, om.sill + 0.01, zWall - out * 0.014, W + 0.06, 0.02, 0.028, -1, out > 0 ? 'z+' : 'z-');
-    if (exterior) {
+    if (exterior && facade.traditional) {
       // projecting plaster sill outside
       set.get(trim).box(M, 0, om.sill - 0.03, out * (t / 2 + 0.02), W + 0.12, 0.06, 0.04, -1, out > 0 ? 'z-' : 'z+');
+    } else if (exterior && facade.design.windows !== 'box') {
+      // modern: a slim metal sill (a box frame around the window has its own)
+      set.get(accentMaterial(facade, mats, true)).box(M, 0, om.sill - 0.015, out * (t / 2 + 0.0175), W + 0.04, 0.03, 0.035, -1, out > 0 ? 'z-' : 'z+');
     }
   }
 }

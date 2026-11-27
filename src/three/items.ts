@@ -6,7 +6,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { catalogByKind, type Mount } from '@/data/catalog';
 import type { PlacedItem } from '@/types/house';
 import { finite, orectFromCentre, type ORect } from './core/geo';
-import { ceilingAbove, type HouseModel, type LevelModel } from './build/model';
+import { ceilingAbove, hasFloorAt, roomAt, type HouseModel, type LevelModel } from './build/model';
 import { buildItem } from './furniture';
 
 export interface ItemEntry {
@@ -21,6 +21,8 @@ export interface ItemEntry {
   rect: ORect;
   /** geometries created by baking (owned here, disposed on removal) */
   owned: THREE.BufferGeometry[];
+  /** stands in a portico / sit-out / balcony, or outside the house altogether */
+  outdoor: boolean;
 }
 
 const shapeKeyOf = (i: PlacedItem) => `${i.kind}|${i.w}|${i.d}|${i.h}|${i.color ?? ''}`;
@@ -157,9 +159,52 @@ export class ItemLayer {
   readonly group = new THREE.Group();
   readonly entries = new Map<string, ItemEntry>();
   private model: HouseModel | null = null;
+  /** switched-off copies of the glowing furniture materials (lamp diffusers, shades, car lamps), made on demand */
+  private dark = new Map<THREE.Material, THREE.Material>();
+  private outdoorOff = false;
 
   constructor() {
     this.group.name = 'furniture';
+  }
+
+  /**
+   * The lamps of furniture standing outdoors (portico ceiling light, a parked car, …) go out with the outdoor
+   * lights. Only the placed items' own meshes change material; the shared furniture materials and the prototype
+   * cache are left alone, and nothing is rebuilt. Returns true when anything changed.
+   */
+  setOutdoorLampsOff(off: boolean): boolean {
+    if (off === this.outdoorOff) return false;
+    this.outdoorOff = off;
+    let changed = false;
+    for (const e of this.entries.values()) if (this.applyLamps(e)) changed = true;
+    return changed;
+  }
+
+  private darkOf(lit: THREE.Material): THREE.Material {
+    let d = this.dark.get(lit);
+    if (!d) {
+      d = lit.clone();
+      (d as THREE.MeshStandardMaterial).emissiveIntensity = 0;
+      d.name = `${lit.name}|off`;
+      this.dark.set(lit, d);
+    }
+    return d;
+  }
+
+  /** Give an item's glowing parts the lit or the switched-off material, as its place and the switch ask. */
+  private applyLamps(e: ItemEntry): boolean {
+    const off = this.outdoorOff && e.outdoor;
+    let changed = false;
+    e.obj.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || Array.isArray(m.material)) return;
+      const lit = (m.userData.litMaterial as THREE.Material | undefined) ?? m.material;
+      if (!lit?.userData?.emissive) return;
+      m.userData.litMaterial = lit;
+      const want = off ? this.darkOf(lit) : lit;
+      if (m.material !== want) { m.material = want; changed = true; }
+    });
+    return changed;
   }
 
   setModel(model: HouseModel | null): void {
@@ -182,7 +227,7 @@ export class ItemLayer {
         const { group, owned } = bakeItem(buildRaw(item));
         group.userData.uid = item.uid;
         group.name = `item:${item.uid}`;
-        e = { item, obj: group, mount: mountOf(item.kind), shapeKey: sk, poseKey: '', levelIndex: 0, bottom: 0, rect: orectFromCentre(item.x, item.y, item.w, item.d, item.rot), owned };
+        e = { item, obj: group, mount: mountOf(item.kind), shapeKey: sk, poseKey: '', levelIndex: 0, bottom: 0, rect: orectFromCentre(item.x, item.y, item.w, item.d, item.rot), owned, outdoor: false };
         this.entries.set(item.uid, e);
         this.group.add(group);
         changed = true;
@@ -207,6 +252,9 @@ export class ItemLayer {
     e.obj.updateMatrixWorld(true);
     e.rect = orectFromCentre(item.x, item.y, Math.max(0.01, item.w), Math.max(0.01, item.d), finite(item.rot, 0));
     e.poseKey = poseKeyOf(item);
+    const room = lm ? roomAt(lm, item.x, item.y) : null;
+    e.outdoor = !!lm && (room ? !!room.room.outdoor : !hasFloorAt(lm, item.x, item.y));
+    this.applyLamps(e);
   }
 
   private drop(e: ItemEntry): void {
@@ -217,6 +265,8 @@ export class ItemLayer {
   dispose(): void {
     for (const e of this.entries.values()) this.drop(e);
     this.entries.clear();
+    for (const m of this.dark.values()) m.dispose();
+    this.dark.clear();
     this.group.removeFromParent();
   }
 }

@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Box, Camera, Eye, Footprints, Layers, Map as MapIcon, Moon, Move3d, PencilRuler, Redo2, Scissors, Sun, Undo2 } from 'lucide-react';
+import { Box, Camera, Eye, Footprints, Lamp, Layers, Lightbulb, LightbulbOff, Map as MapIcon, Moon, Move3d, PencilRuler, Redo2, Scissors, Sun, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Segmented, Switch, Range } from '@/components/ui/controls';
 import { Popover } from '@/components/ui/popover';
@@ -98,6 +98,16 @@ export function TopBar() {
         <span className="hidden h-6 w-px bg-border sm:block" />
         <Toggle on={!!display.cutWalls} onClick={() => setDisplay({ cutWalls: !display.cutWalls })} icon={<Scissors />} label="Dollhouse" title="Cut the walls at 1.25 m to see into the rooms" />
         <Toggle on={!!display.structure} onClick={() => setDisplay({ structure: !display.structure })} icon={<Box />} label="Structure" title="Show the RCC frame: footings, columns, beams, slabs" />
+        <Toggle on={!!display.night} onClick={() => setDisplay({ night: !display.night })} icon={<Lamp />} label="Night" title="Night: the outdoor lights on (design them under Outside)" />
+        {display.night && (
+          <Toggle
+            on={display.lightsOn !== false}
+            onClick={() => setDisplay({ lightsOn: display.lightsOn === false })}
+            icon={display.lightsOn === false ? <LightbulbOff /> : <Lightbulb />}
+            label={display.lightsOn === false ? 'Lights off' : 'Lights on'}
+            title={display.lightsOn === false ? 'Switch the outdoor lights back on (L)' : 'Switch every outdoor light off (L)'}
+          />
+        )}
         <Popover
           trigger={({ toggle, open }) => (
             <Button variant="secondary" size="sm" className={cn('h-8', open && 'border-border-strong')} onClick={toggle} aria-expanded={open}>
@@ -107,11 +117,11 @@ export function TopBar() {
         >
           <div className="grid gap-0.5">
             <Switch label="Roof and parapet" checked={!!display.showRoof} onChange={(v) => setDisplay({ showRoof: v })} />
-            <Switch label="Furniture" checked={!!display.showFurniture} onChange={(v) => setDisplay({ showFurniture: v })} />
+            <Switch label="Furniture" hint="Off: hidden, and you can walk through where it stood" checked={!!display.showFurniture} onChange={(v) => setDisplay({ showFurniture: v })} />
             <Switch label="Room labels" checked={!!display.showLabels} onChange={(v) => setDisplay({ showLabels: v })} />
             <Switch label="Plot and compound wall" checked={!!display.showSite} onChange={(v) => setDisplay({ showSite: v })} />
             <div className="mt-2 grid gap-3 border-t border-border pt-3">
-              <Range label="Sun" min={6} max={19} step={0.25} value={display.sunHour ?? 10} display={hourLabel(display.sunHour ?? 10)} onChange={(sunHour) => setDisplay({ sunHour })} />
+              <Range label={display.night ? 'Sun (shows by day)' : 'Sun'} min={6} max={19} step={0.25} value={display.sunHour ?? 10} display={hourLabel(display.sunHour ?? 10)} onChange={(sunHour) => setDisplay({ sunHour })} />
               <Range label="Dollhouse cut height" min={0.6} max={2.4} step={0.05} value={display.cutHeight ?? 1.25} display={`${(display.cutHeight ?? 1.25).toFixed(2)} m`} onChange={(cutHeight) => setDisplay({ cutHeight })} />
               <div className="flex items-center justify-between text-[13px]">
                 <span className="text-muted-foreground">Units</span>

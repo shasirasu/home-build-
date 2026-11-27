@@ -7,11 +7,14 @@ import type { Vec2 } from '@/types/house';
 import { BatchSet, type Batch, type P3 } from '../core/batch';
 import { orectLocal } from '../core/geo';
 import type { MaterialLib } from '../materials';
+import { isFront, zoneAt, zoneCladding, type FacadeInfo } from './facade';
 import { faceRoom, insideAnyWall, wallPoint, type HouseModel, type LevelModel, type OpeningModel, type RoomModel, type WallModel } from './model';
 
 export interface BuildCtx {
   model: HouseModel;
   mats: MaterialLib;
+  /** The exterior design and where the front of the house is. */
+  facade: FacadeInfo;
 }
 
 export const DEFAULT_WALL_PAINT = '#f1ede4';
@@ -24,7 +27,10 @@ export const ARCH_SEG = 18;
 interface FaceInfo {
   room: RoomModel | null;
   mat: THREE.Material;
+  /** finished as part of the outside of the house (open to the sky, or looking onto a portico / sit-out) */
   exterior: boolean;
+  /** open to the sky: no room of any kind in front of it */
+  open: boolean;
   /** bottom of the face relative to FFL (negative when the room floor is lower / to lap over the plinth) */
   base: number;
   hidden: boolean;
@@ -60,17 +66,19 @@ export function archHeight(om: OpeningModel, s: number): number {
 }
 
 export function buildWalls(ctx: BuildCtx, lm: LevelModel, wallsGroup: THREE.Group, finishGroup: THREE.Group): void {
-  const { mats, model } = ctx;
+  const { mats, model, facade } = ctx;
   const set = new BatchSet();
   const trims = new BatchSet();
   const elev = lm.elevation;
-  const extMat = mats.paint(model.spec.exterior?.wall ?? '#ece5d6');
+  // the finish of an outside face: by storey, or the feature finish where the design puts it
+  const extMat = (ox: number, oy: number, px: number, py: number) => mats.cladding(zoneCladding(facade, zoneAt(facade, lm.index, ox, oy, px, py)), facade.images);
+  const bay = facade.design.feature === 'entrance' ? facade.bay : null;
   const defMat = mats.paint(DEFAULT_WALL_PAINT);
   const revealMat = mats.reveal();
   const topMat = mats.solid('#3d3a36', 0.9, true);
   const bandMat = mats.trim();
   const lintelH = lintelHeight(lm);
-  const hasExterior = lm.walls.some((w) => w.wall.kind === 'exterior');
+  const hasExterior = facade.traditional && lm.walls.some((w) => w.wall.kind === 'exterior');
 
   lm.walls.forEach((wm, wi) => {
     const r = wm.rect;
@@ -89,16 +97,34 @@ export function buildWalls(ctx: BuildCtx, lm: LevelModel, wallsGroup: THREE.Grou
     };
     for (const rm of lm.rooms) addVerts(rm.poly);
     for (const h of lm.floorOpenings) addVerts(h);
+    // the edges of the entrance bay, where a wall along the front changes finish
+    if (bay && wm.wall.kind === 'exterior' && (isFront(facade, wm.nx, wm.ny) || isFront(facade, -wm.nx, -wm.ny))) {
+      const la = facade.lat[0] * r.ax + facade.lat[1] * r.ay, lu = facade.lat[0] * r.ux + facade.lat[1] * r.uy;
+      if (Math.abs(lu) > 0.5) for (const l of bay) { const sCut = (l - la) / lu; if (sCut > 0.02 && sCut < L - 0.02) cutList.push(sCut); }
+    }
     cutList.sort((a, b) => a - b);
     const cuts: number[] = [];
     for (const c of cutList) if (!cuts.length || c - cuts[cuts.length - 1] > 1e-3) cuts.push(c);
 
-    const infoAt = (x: number, y: number): FaceInfo => {
-      if (insideAnyWall(lm, x, y, wm)) return { room: null, mat: defMat, exterior: false, base: 0, hidden: true };
+    const infoAt = (x: number, y: number, ox: number, oy: number): FaceInfo => {
+      if (insideAnyWall(lm, x, y, wm)) return { room: null, mat: defMat, exterior: false, open: false, base: 0, hidden: true };
       const room = faceRoom(model, lm, x, y);
-      if (room) return { room, mat: mats.paint(room.room.wallColor ?? DEFAULT_WALL_PAINT), exterior: false, base: room.level === lm ? Math.min(0, room.offset) : 0, hidden: false };
-      if (wm.wall.kind === 'exterior') return { room: null, mat: extMat, exterior: true, base: lm.onGrade ? -0.03 : 0, hidden: false };
-      return { room: null, mat: defMat, exterior: false, base: 0, hidden: false };
+      if (room) {
+        const base = room.level === lm ? Math.min(0, room.offset) : 0;
+        // the walls of a portico or sit-out are part of the outside of the house: they take the facade finish
+        // (the traditional look keeps them in the room's own paint)
+        if (room.room.outdoor && wm.wall.kind === 'exterior' && !facade.traditional) return { room, mat: extMat(ox, oy, x, y), exterior: true, open: false, base, hidden: false };
+        return { room, mat: mats.paint(room.room.wallColor ?? DEFAULT_WALL_PAINT), exterior: false, open: false, base, hidden: false };
+      }
+      if (wm.wall.kind === 'exterior') return { room: null, mat: extMat(ox, oy, x, y), exterior: true, open: true, base: lm.onGrade ? -0.03 : 0, hidden: false };
+      return { room: null, mat: defMat, exterior: false, open: false, base: 0, hidden: false };
+    };
+    // UVs of a face: metres along the wall and up it. Outside faces read left to right from outside and run up
+    // from the ground, so courses line up from storey to storey; a picture set to 'fit' takes the whole wall.
+    const uvOf = (info: FaceInfo, side: 1 | -1) => (s: number, h: number): [number, number] => {
+      if (!info.exterior) return [s, h];
+      if (info.mat.userData.fit) return [side > 0 ? s / L : 1 - s / L, (elev + h) / facade.height];
+      return [side > 0 ? s : -s, elev + h];
     };
 
     for (const side of [1, -1] as const) {
@@ -108,14 +134,16 @@ export function buildWalls(ctx: BuildCtx, lm: LevelModel, wallsGroup: THREE.Grou
       for (let i = 0; i < cuts.length - 1; i++) {
         const sa = cuts[i], sb = cuts[i + 1];
         const [px, py] = wallPoint(wm, (sa + sb) / 2, side * (ht + 0.06));
-        spans.push({ sa, sb, info: infoAt(px, py) });
+        spans.push({ sa, sb, info: infoAt(px, py, side * wm.nx, side * wm.ny) });
       }
+      let uv = uvOf(spans[0]?.info ?? { room: null, mat: defMat, exterior: false, open: false, base: 0, hidden: true }, side);
       const rect = (b: Batch, s0: number, s1: number, h0: number, h1: number) => {
         if (s1 - s0 < 1e-4 || h1 - h0 < 1e-4) return;
-        b.quad(P(s0, h0, q), P(s1, h0, q), P(s1, h1, q), P(s0, h1, q), hint, [s0, h0, s1, h0, s1, h1, s0, h1], wi);
+        b.quad(P(s0, h0, q), P(s1, h0, q), P(s1, h1, q), P(s0, h1, q), hint, [...uv(s0, h0), ...uv(s1, h0), ...uv(s1, h1), ...uv(s0, h1)], wi);
       };
       for (const { sa, sb, info } of spans) {
         if (info.hidden) continue;
+        uv = uvOf(info, side);
         const room = info.room;
         const dado = room && room.level === lm && room.room.dado && room.room.dado.height > 0.05 ? room.room.dado : null;
         const dadoTop = dado ? (room!.offset + dado.height) : -Infinity;
@@ -139,7 +167,7 @@ export function buildWalls(ctx: BuildCtx, lm: LevelModel, wallsGroup: THREE.Grou
           for (let k = 0; k < ARCH_SEG; k++) {
             const s0 = om.s0 + ((om.s1 - om.s0) * k) / ARCH_SEG, s1 = om.s0 + ((om.s1 - om.s0) * (k + 1)) / ARCH_SEG;
             const h0 = archHeight(om, s0), h1 = archHeight(om, s1);
-            b.quad(P(s0, h0, q), P(s1, h1, q), P(s1, om.head, q), P(s0, om.head, q), hint, [s0, h0, s1, h1, s1, om.head, s0, om.head], wi);
+            b.quad(P(s0, h0, q), P(s1, h1, q), P(s1, om.head, q), P(s0, om.head, q), hint, [...uv(s0, h0), ...uv(s1, h1), ...uv(s1, om.head), ...uv(s0, om.head)], wi);
           }
         }
         // skirting along interior room faces (not over door gaps, not in tiled or outdoor rooms)
@@ -155,7 +183,7 @@ export function buildWalls(ctx: BuildCtx, lm: LevelModel, wallsGroup: THREE.Grou
           run(a, sb);
         }
         // exterior lintel band
-        if (info.exterior && hasExterior && lintelH + BAND_H < H - 0.05) {
+        if (info.open && hasExterior && lintelH + BAND_H < H - 0.05) {
           const band = trims.get(bandMat);
           let a = sa <= 1e-3 ? -BAND_T : sa;
           const end = sb >= L - 1e-3 ? L + BAND_T : sb;
@@ -174,11 +202,14 @@ export function buildWalls(ctx: BuildCtx, lm: LevelModel, wallsGroup: THREE.Grou
     for (const end of [0, 1] as const) {
       const s = end ? L : 0;
       const [px, py] = wallPoint(wm, end ? L + 0.06 : -0.06, 0);
-      const info = infoAt(px, py);
+      const info = infoAt(px, py, end ? r.ux : -r.ux, end ? r.uy : -r.uy);
       if (info.hidden) continue;
       const hint: P3 = end ? [r.ux, 0, r.uy] : [-r.ux, 0, -r.uy];
-      set.get(info.mat).quad(P(s, info.base, -ht), P(s, info.base, ht), P(s, H, ht), P(s, H, -ht), hint, [-ht, info.base, ht, info.base, ht, H, -ht, H], wi);
-      if (info.exterior && hasExterior && lintelH + BAND_H < H - 0.05) {
+      const v0 = info.exterior ? elev + info.base : info.base, v1 = info.exterior ? elev + H : H;
+      const fitEnd = info.exterior && info.mat.userData.fit;
+      set.get(info.mat).quad(P(s, info.base, -ht), P(s, info.base, ht), P(s, H, ht), P(s, H, -ht), hint,
+        fitEnd ? [0, v0 / facade.height, 1, v0 / facade.height, 1, v1 / facade.height, 0, v1 / facade.height] : [-ht, v0, ht, v0, ht, v1, -ht, v1], wi);
+      if (info.open && hasExterior && lintelH + BAND_H < H - 0.05) {
         trims.get(bandMat).box(M, end ? L + BAND_T / 2 : -BAND_T / 2, lintelH + BAND_H / 2, 0, BAND_T, BAND_H, 2 * ht + 2 * BAND_T, wi, end ? 'x-' : 'x+');
       }
     }

@@ -3,7 +3,7 @@
 //   new HouseViewer({ container, display, onSelect, … })
 //     .setHouse(spec)   → builds walls / openings / floors / stairs / roof / structure / site from the spec
 //     .setItems(items)  → furniture layer, diffed by uid
-//     .setDisplay(...)  → level cutaway, dollhouse cut, structure view, labels, site, sun, theme
+//     .setDisplay(...)  → level cutaway, dollhouse cut, structure view, labels, site, sun, night, theme
 //     .setMode('orbit' | 'top' | 'walk'), enterWalk(), focusRoom(), select(), setEditing(), beginPlace() …
 //
 // Rendering is on demand: a frame is drawn only when something changed, the controls moved or the walker moved.
@@ -22,18 +22,28 @@ import { clamp, easeInOut, finite, orectLocal, pointInPoly, type ORect } from '.
 import { EYE, WalkControls, WalkWorld } from './controls/walk';
 import { ItemLayer, bakeItem, buildRaw, itemBottom, mountOf, type ItemEntry } from './items';
 import { disposeLabel, disposeLabelTextures, makeLabel } from './labels';
-import { MaterialLib } from './materials';
+import { MaterialLib, safeColor } from './materials';
 import { Highlight, Picker, collectTargets, sameSelection } from './picking';
 import { gradientTexture, radialAlphaTexture } from './textures';
 
 const DEFAULT_DISPLAY: DisplayOptions = {
-  level: 'all', cutWalls: false, cutHeight: 1.2, structure: false, showRoof: true, showFurniture: true, showLabels: false, showSite: true, sunHour: 15, theme: 'light',
+  level: 'all', cutWalls: false, cutHeight: 1.2, structure: false, showRoof: true, showFurniture: true, showLabels: false, showSite: true, sunHour: 15, night: false, lightsOn: true, theme: 'light',
 };
 
 const THEME = {
   light: { top: '#f8f6f1', bottom: '#ece7dd', ground: '#e3ded3', accent: '#c8301f' },
   dark: { top: '#1a1a19', bottom: '#111110', ground: '#262624', accent: '#ef4f3b' },
 } as const;
+
+/** Night: the sky, the ground under it, the moon and what is left of the daylight. Same in both themes. */
+const NIGHT = {
+  top: '#04060c', bottom: '#151d30', ground: '#0c1017',
+  moon: '#a9bfe8', moonPower: 0.5, sky: '#6f86b8', earth: '#232833', ambient: 0.5, env: 0.1,
+  /** walking indoors: the rooms are lit (warm, even light), the eye opens up a little */
+  roomSky: '#fff1dc', roomEarth: '#c4b49a', roomAmbient: 0.8, roomEnv: 0.36, roomExposure: 1.12,
+} as const;
+/** Strength of the few real lamps for a `userData.base` of 1 at brightness 1. */
+const LAMP_GAIN = 1;
 
 export type RenderQuality = 'auto' | 'high' | 'low';
 
@@ -272,6 +282,9 @@ export class HouseViewer implements HouseViewerAPI {
 
     this.walk = new WalkControls(this.camera, el);
 
+    // a picture used as a facade finish arrives after the house is built: draw again when it does
+    this.mats.onChange = () => { if (!this.disposed) this.invalidate(true); };
+
     this.applyTheme();
     this.resize();
     if (typeof ResizeObserver !== 'undefined') {
@@ -302,7 +315,7 @@ export class HouseViewer implements HouseViewerAPI {
     this.world = new WalkWorld(next);
     this.walk.world = this.world;
     this.items.setModel(next.model);
-    this.world.setItems(this.items.entries.values());
+    this.world.setItems(this.items.entries.values(), this.walkerAt());
     this.solveDoors(true);
 
     // scene scale: ground disc, controls limits, shadow frustum
@@ -339,10 +352,20 @@ export class HouseViewer implements HouseViewerAPI {
     if (this.disposed) return;
     const changed = this.items.set(items ?? []);
     if (!changed) return;
-    this.world?.setItems(this.items.entries.values());
+    this.world?.setItems(this.items.entries.values(), this.walkerAt());
     this.applyItemVisibility();
     this.solveDoors(false);
     this.invalidate(true);
+  }
+
+  /** Where the walker stands (plan), while walking. */
+  private walkerAt(): [number, number] | undefined {
+    return this.mode === 'walk' ? [this.walk.x, this.walk.y] : undefined;
+  }
+
+  /** Is the furniture drawn at all? Hidden furniture is not in the way of the walker or of the doors. */
+  private furnitureShown(): boolean {
+    return this.display.showFurniture && !this.display.structure;
   }
 
   setDisplay(opts: Partial<DisplayOptions>): void {
@@ -352,7 +375,9 @@ export class HouseViewer implements HouseViewerAPI {
     next.cutHeight = clamp(finite(next.cutHeight, 1.2), 0.2, 4);
     next.sunHour = clamp(finite(next.sunHour, 15), 5, 20);
     this.display = next;
-    if (prev.theme !== next.theme) this.applyTheme();
+    next.night = !!next.night;
+    next.lightsOn = next.lightsOn !== false;
+    if (prev.theme !== next.theme || isNight(prev) !== isNight(next)) this.applyTheme();
     this.applyDisplay();
     // a cutaway is for looking INTO the rooms: re-frame when the storey or the cut changes (never mid-gesture)
     if ((prev.level !== next.level || prev.cutWalls !== next.cutWalls) && this.mode === 'orbit' && this.view && !this.firstHouse && !this.down && !this.drag) {
@@ -371,7 +396,7 @@ export class HouseViewer implements HouseViewerAPI {
     this.cancelDrag();
     const from = this.mode;
     if (from === 'orbit') this.saveOrbit();
-    if (from === 'walk') { this.walk.enabled = false; this.walk.unlock(); this.exposure = 1; }
+    if (from === 'walk') { this.walk.enabled = false; this.walk.unlock(); this.exposure = 1; this.indoorK = 0; }
     if (from === 'top') {
       // carry on from where the plan view was looking
       const t = this.topCtl.target;
@@ -828,6 +853,24 @@ export class HouseViewer implements HouseViewerAPI {
     restyle(v.roof.walls, v.roof.rcc);
     v.site.visible = d.showSite && !st;
 
+    // outdoor lights: on at night unless the main switch is off, at the colour and brightness of the design (the
+    // fittings themselves are part of the finishes: they stay when the lights are off, and are hidden with their
+    // storey and in the structure view)
+    const L = v.facade.design.lighting;
+    const night = isNight(d);
+    const lit = night && d.lightsOn !== false;
+    const level = lit ? clamp(finite(L.brightness, 1), 0.2, 2) : 0;
+    this.mats.setLighting(L.color, level, !!L.kinds.windows);
+    for (const g of v.lights.night) if (g) g.visible = lit;
+    // after dark the windows show the rooms behind them: lit, or dark when the lights are off
+    for (const g of v.lights.panes) if (g) g.visible = night;
+    // furniture lamps standing outdoors (portico ceiling light, the car) go out with the main switch
+    this.items.setOutdoorLampsOff(night && d.lightsOn === false);
+    for (const l of v.lights.lamps) {
+      l.color.set(safeColor(L.color, '#ffd0a0'));
+      l.intensity = finite(l.userData.base as number, 0) * level * LAMP_GAIN;
+    }
+
     // ground: solid normally, a faint sectioned sheet in the structure view so footings read below grade
     this.groundMat.opacity = st ? 0.34 : 1;
     this.groundMat.depthWrite = !st;
@@ -861,6 +904,11 @@ export class HouseViewer implements HouseViewerAPI {
     const d = this.effective();
     const ti = this.topIndex(d);
     const show = d.showFurniture && !d.structure;
+    // furniture that is not drawn is not there to walk into, and does not hold a door back
+    if (this.world && this.world.furnitureSolid !== show) {
+      this.world.setItemsSolid(show, this.walkerAt());
+      this.solveDoors(false);
+    }
     // dollhouse cut: whatever hangs entirely above the cut (fans, ceiling lights, wall cabinets) goes with the walls
     const cutY = d.cutWalls && this.view?.levels[ti] ? this.view.levels[ti].lm.elevation + d.cutHeight : Infinity;
     for (const e of this.items.entries.values()) {
@@ -870,10 +918,11 @@ export class HouseViewer implements HouseViewerAPI {
 
   private applyTheme(): void {
     const t = THEME[this.display.theme === 'dark' ? 'dark' : 'light'];
+    const night = isNight(this.display);
     this.bgTex?.dispose();
-    this.bgTex = gradientTexture(t.top, t.bottom);
+    this.bgTex = night ? gradientTexture(NIGHT.top, NIGHT.bottom) : gradientTexture(t.top, t.bottom);
     this.scene.background = this.bgTex;
-    this.groundMat.color.set(t.ground);
+    this.groundMat.color.set(night ? NIGHT.ground : t.ground);
     this.selHighlight.setColor(t.accent);
     this.hoverHighlight.setColor(t.accent);
     this.outlineMat.color.set(t.accent);
@@ -925,11 +974,17 @@ export class HouseViewer implements HouseViewerAPI {
     nx /= nl; ny /= nl;
     // plan axes: east = north turned clockwise on the drawing, south = -north
     const ex = -ny, ey = nx, sx = -nx, sy = -ny;
-    const t = clamp((d.sunHour - 6) / 13, 0, 1);
-    const az = Math.PI * t;
-    const hx = ex * Math.cos(az) + sx * Math.sin(az), hy = ey * Math.cos(az) + sy * Math.sin(az);
-    const elev = THREE.MathUtils.degToRad(Math.max(7, 68 * Math.sin(Math.PI * t)));
-    const dir = new THREE.Vector3(hx * Math.cos(elev), Math.sin(elev), hy * Math.cos(elev)).normalize();
+    const at = (hour: number, minElev: number) => {
+      const t = clamp((hour - 6) / 13, 0, 1);
+      const az = Math.PI * t;
+      const hx = ex * Math.cos(az) + sx * Math.sin(az), hy = ey * Math.cos(az) + sy * Math.sin(az);
+      const elev = THREE.MathUtils.degToRad(Math.max(minElev, 68 * Math.sin(Math.PI * t)));
+      return { t, dir: new THREE.Vector3(hx * Math.cos(elev), Math.sin(elev), hy * Math.cos(elev)).normalize() };
+    };
+    const day = at(d.sunHour, 7);
+    // the moon keeps one place in the sky (the hour of the day is ignored at night): mid-afternoon side, fairly high
+    const night = isNight(d);
+    const dir = night ? at(15, 7).dir : day.dir;
     const cx = m ? m.centre[0] : 0, cy = m ? m.centre[1] : 0;
     const topY = m ? m.topY : 6;
     const b = m?.box;
@@ -940,17 +995,55 @@ export class HouseViewer implements HouseViewerAPI {
     cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
     cam.near = 1; cam.far = 2 * R + 60;
     cam.updateProjectionMatrix();
-    // warmer and softer toward sunrise / sunset
-    const low = 1 - Math.sin(Math.PI * t);
-    this.sun.color.set('#fff3dc').lerp(new THREE.Color('#ffc48a'), low * 0.8);
-    this.sun.intensity = 2.7 - low * 1.1;
     // without the environment map (lite pipeline) the hemisphere light carries all of the ambient
-    this.hemi.intensity = (0.9 - low * 0.15) * (this.envTex ? 1 : 2.1);
-    // plan view: keep the cast shadows as a hint of height, not a dark blanket over the rooms
-    this.sun.shadow.intensity = this.mode === 'top' ? 0.42 : 1;
-    this.shadowMat.opacity = this.mode === 'top' ? 0.14 : 0.26;
+    const noEnv = this.envTex ? 1 : 2.1;
+    const top = this.mode === 'top';
+    if (night) {
+      this.sun.color.set(NIGHT.moon);
+      this.sun.intensity = NIGHT.moonPower;
+      this.sun.shadow.radius = 4.5;
+      this.sun.shadow.intensity = top ? 0.35 : 0.75;
+      this.shadowMat.opacity = top ? 0.2 : 0.4;
+    } else {
+      // warmer and softer toward sunrise / sunset
+      const low = 1 - Math.sin(Math.PI * day.t);
+      this.sun.color.set('#fff3dc').lerp(new THREE.Color('#ffc48a'), low * 0.8);
+      this.sun.intensity = 2.7 - low * 1.1;
+      this.dayAmbient = 0.9 - low * 0.15;
+      this.sun.shadow.radius = 2.2;
+      // plan view: keep the cast shadows as a hint of height, not a dark blanket over the rooms
+      this.sun.shadow.intensity = top ? 0.42 : 1;
+      this.shadowMat.opacity = top ? 0.14 : 0.26;
+    }
+    this.ambientScale = noEnv;
+    this.applyAmbient(night);
     this.sun.target.updateMatrixWorld();
-    this.sunDir.copy(dir);
+    // the default view is taken from the sunny side by day; it stays on that side at night
+    this.sunDir.copy(day.dir);
+  }
+
+  private dayAmbient = 0.9;
+  private ambientScale = 1;
+  /** 0 outdoors … 1 walking inside a room (eased), used at night to light the rooms the walker is in. */
+  private indoorK = 0;
+
+  /** Sky / ground fill light and reflections: daylight, moonlight, or (walking indoors at night) the room lights. */
+  private applyAmbient(night: boolean): void {
+    if (!night) {
+      this.hemi.color.set('#ffffff');
+      this.hemi.groundColor.set('#c9c2b4');
+      this.hemi.intensity = this.dayAmbient * this.ambientScale;
+      this.scene.environmentIntensity = 0.5;
+      this.mats.setCeilingGlow(0.3);
+      return;
+    }
+    const k = this.mode === 'walk' ? this.indoorK : 0;
+    this.hemi.color.set(NIGHT.sky).lerp(_c1.set(NIGHT.roomSky), k);
+    this.hemi.groundColor.set(NIGHT.earth).lerp(_c1.set(NIGHT.roomEarth), k);
+    this.hemi.intensity = (NIGHT.ambient + (NIGHT.roomAmbient - NIGHT.ambient) * k) * this.ambientScale;
+    this.scene.environmentIntensity = NIGHT.env + (NIGHT.roomEnv - NIGHT.env) * k;
+    // ceilings stand in for bounced light by glowing a little: after dark only where the walker's room is lit
+    this.mats.setCeilingGlow(0.05 + 0.25 * k);
   }
 
   private sunDir = new THREE.Vector3(0.4, 0.8, -0.4);
@@ -960,7 +1053,7 @@ export class HouseViewer implements HouseViewerAPI {
   private itemObstacles(levelIndex: number): ORect[] {
     const lm = this.view?.levels[levelIndex]?.lm;
     const out: ORect[] = [];
-    if (!lm) return out;
+    if (!lm || !this.furnitureShown()) return out;
     for (const e of this.items.entries.values()) {
       if (e.levelIndex !== levelIndex || e.item.h < 0.05) continue;
       if (e.bottom > lm.elevation + 1.95 || e.bottom + e.item.h < lm.elevation + 0.04) continue;
@@ -1290,8 +1383,17 @@ export class HouseViewer implements HouseViewerAPI {
     if (moving) this.invalidate(true);
     this.reportRoom(false);
     // eyes adapt a little indoors
-    const target = this.walkIndoors ? 1.22 : 1.0;
+    const night = isNight(this.display);
+    const target = this.walkIndoors ? (night ? NIGHT.roomExposure : 1.22) : 1.0;
     if (Math.abs(target - this.exposure) > 0.004) { this.exposure += (target - this.exposure) * (1 - Math.exp(-2.5 * dt)); this.needsRender = true; }
+    // at night the rooms the walker is in are lit. A portico or sit-out only gets a hint of that: out there the
+    // light comes from the fittings, in pools, and the walls between them stay in shadow
+    const k = this.walkIndoors ? 1 : this.walkRoom ? 0.22 : 0;
+    if (Math.abs(k - this.indoorK) > 0.004) {
+      this.indoorK += (k - this.indoorK) * (1 - Math.exp(-3.5 * dt));
+      if (Math.abs(k - this.indoorK) <= 0.004) this.indoorK = k;
+      if (night) { this.applyAmbient(true); this.needsRender = true; }
+    }
   }
 
   private walkIndoors = false;
@@ -1563,7 +1665,7 @@ export class HouseViewer implements HouseViewerAPI {
   private commitItem(entry: ItemEntry, item: PlacedItem): void {
     entry.item = item;
     this.items.pose(entry);
-    this.world?.setItems(this.items.entries.values());
+    this.world?.setItems(this.items.entries.values(), this.walkerAt());
     this.solveDoors(false);
     this.invalidate(true);
     this.events.onItemChange?.(item);
@@ -1633,6 +1735,13 @@ export class HouseViewer implements HouseViewerAPI {
     this.invalidate();
     if (!silent) this.events.onPlaceEnd?.(drop && pl.valid ? pl.item : null);
   }
+}
+
+const _c1 = new THREE.Color();
+
+/** Night as drawn: the structure view is an engineering model and is always shown in daylight. */
+function isNight(d: DisplayOptions): boolean {
+  return !!d.night && !d.structure;
 }
 
 function normAngle(a: number): number {

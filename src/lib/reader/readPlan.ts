@@ -325,7 +325,15 @@ function scaleFromWalls(segs: Seg[]): number | null {
 
 // ------------------------------------------------------------------------------------------------ main
 
-const TITLE_RANK: [RegExp, number][] = [[/basement|cellar/i, -1], [/stilt|parking/i, 0], [/ground|\bg\.?f\b/i, 0], [/first|1st|\bf\.?f\b/i, 1], [/second|2nd|\bs\.?f\b/i, 2], [/third|3rd/i, 3], [/fourth|4th/i, 4], [/terrace|roof/i, 99]];
+const TITLE_RANK: [RegExp, number][] = [[/basement|cellar/i, -1], [/stilt|parking/i, 0], [/ground|\bg\.?g\b|\bg\.?f\b/i, 0], [/first|1st|\bf\.?f\b/i, 1], [/second|2nd|\bs\.?f\b/i, 2], [/third|3rd/i, 3], [/fourth|4th/i, 4], [/terrace|roof/i, 99]];
+
+function floorTitle(text: string): string {
+  const t = text.replace(/\s*plan\s*$/i, '').trim();
+  if (/^(g\.?g\.?|g\.?f\.?)$/i.test(t)) return 'Ground Floor';
+  if (/^(f\.?f\.?)$/i.test(t)) return 'First Floor';
+  if (/^(s\.?f\.?)$/i.test(t)) return 'Second Floor';
+  return titleCase(t);
+}
 
 export function readPlan(prims: Prims): ReadResult {
   const notes: string[] = [];
@@ -369,7 +377,8 @@ export function readPlan(prims: Prims): ReadResult {
     .filter((c) => c.box.x1 - c.box.x0 >= 2.5 * upm && c.box.y1 - c.box.y0 >= 2.5 * upm);
   if (!clusters.length) return fail('No floor plan was found in the linework. Trace it by hand with the wall and room tools.');
 
-  const titles = texts.filter((t) => /plan|floor/i.test(t.str) && TITLE_RANK.some(([re]) => re.test(t.str)));
+  // CAD sheets often use only short labels such as GG / GF / FF; accept those as well as full titles.
+  const titles = texts.filter((t) => TITLE_RANK.some(([re]) => re.test(t.str)) && (/plan|floor/i.test(t.str) || /^(\s*(g\.?g\.?|g\.?f\.?|f\.?f\.?|s\.?f\.?)\s*)$/i.test(t.str)));
   const titled = clusters.map((c) => {
     let best: TextItem | null = null, bd = Infinity;
     for (const t of titles) {
@@ -378,10 +387,10 @@ export function readPlan(prims: Prims): ReadResult {
       if (d < 4 * upm && d < bd) { bd = d; best = t; }
     }
     const rank = best ? (TITLE_RANK.find(([re]) => re.test(best!.str))?.[1] ?? null) : null;
-    return { ...c, title: best ? titleCase(best.str.replace(/\s*plan\s*$/i, '')) : '', rank };
+    return { ...c, title: best ? floorTitle(best.str) : '', rank };
   });
   if (titled.some((c) => c.rank === 99)) notes.push('A terrace / roof plan on the sheet was skipped.');
-  const ordered = titled.filter((c) => c.rank !== 99).sort((a, b) => (a.rank ?? 100 + a.box.x0) - (b.rank ?? 100 + b.box.x0));
+  const ordered = titled.filter((c) => c.rank !== 99).sort((a, b) => (a.rank ?? 100) - (b.rank ?? 100) || a.box.x0 - b.box.x0);
   if (!ordered.length) return fail('Only a terrace or roof plan was found on this sheet.');
 
   const floors: ReadFloor[] = [];

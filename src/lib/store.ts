@@ -71,6 +71,23 @@ interface State {
 
 const HISTORY = 60;
 
+/** Set when the browser refused to save (storage full): the studio shows it. */
+export const storageProblem: { full: boolean; listeners: Set<() => void> } = { full: false, listeners: new Set() };
+
+/** localStorage that never throws into the app: a full store is reported instead of breaking every edit. */
+const safeLocalStorage: Storage = {
+  get length() { return localStorage.length; },
+  clear: () => localStorage.clear(),
+  key: (i) => localStorage.key(i),
+  getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  removeItem: (k) => { try { localStorage.removeItem(k); } catch { /* nothing to remove */ } },
+  setItem: (k, v) => {
+    let full = false;
+    try { localStorage.setItem(k, v); } catch (e) { full = true; console.warn('[store] could not save the houses', e); }
+    if (full !== storageProblem.full) { storageProblem.full = full; storageProblem.listeners.forEach((f) => f()); }
+  },
+};
+
 export const useStore = create<State>()(
   persist(
     (set, get) => {
@@ -90,7 +107,7 @@ export const useStore = create<State>()(
         rates: DEFAULT_RATES,
         unit: 'ft',
         theme: (typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark') ? 'dark' : 'light',
-        display: { level: 'all', cutWalls: false, cutHeight: 1.25, structure: false, showRoof: true, showFurniture: true, showLabels: true, showSite: true, sunHour: 10 },
+        display: { level: 'all', cutWalls: false, cutHeight: 1.25, structure: false, showRoof: true, showFurniture: true, showLabels: true, showSite: true, sunHour: 10, night: false, lightsOn: true },
         selection: null,
         mode: 'orbit',
         editing: false,
@@ -150,7 +167,7 @@ export const useStore = create<State>()(
     },
     {
       name: 'hb3d-store-v1',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => safeLocalStorage),
       partialize: (s) => ({ projects: s.projects, currentId: s.currentId, rates: s.rates, unit: s.unit, display: s.display }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<State>;

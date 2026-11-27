@@ -86,7 +86,7 @@ export function ProjectPanel() {
         ))}
       </ul>
       {currentId !== SAMPLE_ID && <Button className="mt-2 w-full" onClick={() => openProject(SAMPLE_ID)}><FolderOpen /> Open the default house</Button>}
-      <Button className="mt-2 w-full" onClick={() => (location.hash = '#/new')}><Upload /> Upload a new plan</Button>
+      <Button className="mt-2 w-full" onClick={() => (location.hash = '#/new')}><Upload /> Create a new plan</Button>
     </div>
   );
 }

@@ -9,11 +9,18 @@
 //   #focus=<level>:<room>   edit=1   place=<catalog kind>   hud=0
 //   #q=high|low             force the full / lite render pipeline (default: lite only on software WebGL)
 //   #spec=odd               a deliberately awkward house (bad walls / openings / items) to check robustness
+//   #night=1  lights=0      night: dark sky, moonlight, the outdoor lights of the exterior design switched on;
+//                           lights=0 = the main switch off (a dark house under the moon; no effect by day)
+//   #ext=<style id>         exterior style from src/data/exterior.ts (modern-contrast, warm-minimal, concrete-timber,
+//                           stone-white, brick-steel, graphite, tropical, classic); default = the house's own design
+//   #img=1|<zone>[,fit]     a test picture as the finish of a zone (default: feature; 1 = feature, tiled 1.2 m wide)
+//   #light=<hex without #>  lightlevel=0.3..1.6  kinds=wall,uplight,...    colour, brightness and kinds of the lights
 
 import { catalogByKind } from '@/data/catalog';
 import { SAMPLE_FURNISHING } from '@/data/sampleFurnishing';
 import { SAMPLE_HOUSE } from '@/data/sampleHouse';
-import type { PlacedItem } from '@/types/house';
+import { designOfStyle, resolveExterior } from '@/data/exterior';
+import type { ExteriorLightKind, ExteriorZone, HouseSpec, PlacedItem } from '@/types/house';
 import type { DisplayOptions, Selection } from '../api';
 import { HouseViewer } from '../HouseViewer';
 import { ODD_HOUSE, ODD_ITEMS } from './oddHouse';
@@ -33,9 +40,11 @@ const display: Partial<DisplayOptions> = {
   showRoof: flag('roof', true),
   showFurniture: flag('furn', true),
   sunHour: num('sun', 15),
+  night: flag('night', false),
+  lightsOn: flag('lights', true),
   theme: params.get('theme') === 'dark' ? 'dark' : 'light',
 };
-document.body.style.background = display.theme === 'dark' ? '#141413' : '#f4f1ea';
+document.body.style.background = display.night ? '#0a0d14' : display.theme === 'dark' ? '#141413' : '#f4f1ea';
 
 const hud = document.createElement('div');
 hud.style.cssText = 'position:fixed;left:10px;bottom:8px;font:11px/1.4 ui-monospace,Menlo,monospace;color:#6b665d;pointer-events:none;white-space:pre';
@@ -70,7 +79,50 @@ const viewer = new HouseViewer({
   },
 });
 const t1 = performance.now();
-viewer.setHouse(odd ? ODD_HOUSE : SAMPLE_HOUSE);
+
+/** A picture to try as a facade finish: a patterned tile drawn on a canvas, as the app would hand over an upload. */
+function testPicture(): { url: string; aspect: number } {
+  const W = 256, H = 256;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#c9b089';
+  g.fillRect(0, 0, W, H);
+  // a jali-like lattice so scale, direction and seams are easy to judge
+  g.strokeStyle = '#6b4a2b';
+  g.lineWidth = 10;
+  for (let i = -W; i < 2 * W; i += 64) {
+    g.beginPath(); g.moveTo(i, 0); g.lineTo(i + W, H); g.stroke();
+    g.beginPath(); g.moveTo(i + W, 0); g.lineTo(i, H); g.stroke();
+  }
+  g.fillStyle = '#8d2f1f';
+  g.fillRect(0, 0, 40, 40); // marks the top-left corner
+  g.strokeStyle = '#3d2a18';
+  g.lineWidth = 4;
+  g.strokeRect(2, 2, W - 4, H - 4);
+  return { url: c.toDataURL('image/png'), aspect: W / H };
+}
+
+/** The sample (or odd) house with the exterior asked for in the hash. */
+function houseFromHash(base: HouseSpec): HouseSpec {
+  if (!params.has('ext') && !params.has('img') && !params.has('light') && !params.has('lightlevel') && !params.has('kinds')) return base;
+  const design = params.has('ext') ? designOfStyle(params.get('ext') ?? undefined) : resolveExterior(base);
+  if (params.has('img')) {
+    const [zone, how] = (params.get('img') ?? '').split(',');
+    const z = (['ground', 'upper', 'feature', 'parapet', 'band', 'plinth', 'boundary'] as ExteriorZone[]).find((k) => k === zone) ?? 'feature';
+    design.images = { ...(design.images ?? {}), test: { name: 'Test picture', ...testPicture() } };
+    design.zones[z] = { material: 'image', image: 'test', size: 1.2, fit: how === 'fit' ? 'fit' : 'tile' };
+  }
+  if (params.has('light')) design.lighting.color = `#${params.get('light')}`;
+  if (params.has('lightlevel')) design.lighting.brightness = num('lightlevel', 1);
+  if (params.has('kinds')) {
+    const on = (params.get('kinds') ?? '').split(',');
+    design.lighting.kinds = Object.fromEntries(on.filter(Boolean).map((k) => [k, true])) as Partial<Record<ExteriorLightKind, boolean>>;
+  }
+  return { ...base, exterior: { ...base.exterior, design } };
+}
+
+viewer.setHouse(houseFromHash(odd ? ODD_HOUSE : SAMPLE_HOUSE));
 const t2 = performance.now();
 viewer.setItems(items);
 const t3 = performance.now();

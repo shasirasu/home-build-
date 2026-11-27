@@ -5,19 +5,23 @@ import * as THREE from 'three';
 import type { Vec2 } from '@/types/house';
 import { BatchSet, polyFace, polyFaceDiff } from '../core/batch';
 import { clamp, cleanPoly, finite, hashString, pointInPoly, rng, segDist } from '../core/geo';
+import { accentMaterial, zoneCladding } from './facade';
 import type { BuildCtx } from './walls';
 
 export interface SiteBuild {
   /** compound wall runs for walk collision: [ax, ay, bx, by, thickness, height] */
   wallRuns: [number, number, number, number, number, number][];
+  /** tops of the gate pillars (plan x, y and height), for the gate lamps */
+  pillars: [number, number, number][];
 }
 
 export function buildSite(ctx: BuildCtx, group: THREE.Group): SiteBuild {
-  const { model, mats } = ctx;
+  const { model, mats, facade } = ctx;
   const site = model.spec.site;
   const wallRuns: SiteBuild['wallRuns'] = [];
+  const pillars: SiteBuild['pillars'] = [];
   const plot = cleanPoly(site?.plot);
-  if (!site || plot.length < 3) return { wallRuns };
+  if (!site || plot.length < 3) return { wallRuns, pillars };
   const set = new BatchSet();
   const paving = (site.paving ?? []).map((p) => cleanPoly(p)).filter((p) => p.length >= 3);
 
@@ -31,15 +35,18 @@ export function buildSite(ctx: BuildCtx, group: THREE.Group): SiteBuild {
   const cw = site.compoundWall;
   if (cw && cw.height > 0.1) {
     const H = clamp(finite(cw.height, 1.2), 0.2, 4), T = clamp(finite(cw.thickness, 0.2), 0.05, 0.6);
-    const wallMat = built.get(mats.paint(model.spec.exterior?.wall ?? '#ece5d6', false, 0.9));
-    const copMat = built.get(mats.paint('#f7f4ee', false, 0.85));
+    const boundary = mats.cladding(zoneCladding(facade, 'boundary'), facade.images, false);
+    const wallMat = built.get(boundary.userData.fit ? mats.paint('#ece5d6', false, 0.9) : boundary);
+    const copMat = built.get(facade.traditional ? mats.paint('#f7f4ee', false, 0.85) : accentMaterial(facade, mats));
+    const modern = !facade.traditional;
     const gate = cw.gate && cw.gate.a && cw.gate.b ? cw.gate : null;
     const run = (a: Vec2, b: Vec2) => {
       const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
       if (len < 0.05) return;
       const M = new THREE.Matrix4().makeRotationY(Math.atan2(-(b[1] - a[1]), b[0] - a[0])).setPosition(a[0], 0, a[1]);
       wallMat.box(M, len / 2, H / 2, 0, len + T, H, T, -1, 'y-');
-      copMat.box(M, len / 2, H + 0.03, 0, len + T + 0.06, 0.06, T + 0.06);
+      if (modern) copMat.box(M, len / 2, H + 0.015, 0, len + T + 0.02, 0.03, T + 0.02);
+      else copMat.box(M, len / 2, H + 0.03, 0, len + T + 0.06, 0.06, T + 0.06);
       wallRuns.push([a[0], a[1], b[0], b[1], T, H]);
     };
     for (let i = 0; i < plot.length; i++) {
@@ -71,24 +78,46 @@ export function buildSite(ctx: BuildCtx, group: THREE.Group): SiteBuild {
       const PH = H + 0.35, PW = Math.max(0.3, T + 0.12);
       for (const x of [0, gw]) {
         wallMat.box(M, x, PH / 2, 0, PW, PH, PW, -1, 'y-');
-        copMat.box(M, x, PH + 0.04, 0, PW + 0.08, 0.08, PW + 0.08);
-        copMat.box(M, x, PH + 0.11, 0, PW - 0.06, 0.06, PW - 0.06);
+        if (modern) copMat.box(M, x, PH + 0.02, 0, PW + 0.03, 0.04, PW + 0.03);
+        else {
+          copMat.box(M, x, PH + 0.04, 0, PW + 0.08, 0.08, PW + 0.08);
+          copMat.box(M, x, PH + 0.11, 0, PW - 0.06, 0.06, PW - 0.06);
+        }
+        pillars.push([g0[0] + ux * x, g0[1] + uy * x, PH + (modern ? 0.04 : 0.14)]);
       }
       // sliding gate just inside the wall line, on a floor track
-      const ms = built.get(mats.metal('#2c2e31', false, 0.55, 0.55));
+      const style = facade.design.gate;
+      const ms = built.get(style === 'bars' && !modern ? mats.metal('#2c2e31', false, 0.55, 0.55) : accentMaterial(facade, mats));
       const z = inward * (PW / 2 + 0.05);
       const GH = Math.max(0.9, H + 0.15), x0 = PW / 2 - 0.05, x1 = gw - PW / 2 + 0.05;
       const tube = 0.05;
+      const y0 = 0.09, gh = GH - y0;
       ms.box(M, (x0 + x1) / 2, 0.012, z, gw + 0.6, 0.012, 0.06); // track
-      ms.box(M, (x0 + x1) / 2, 0.09 + tube / 2, z, x1 - x0, tube, tube);
+      // frame
+      ms.box(M, (x0 + x1) / 2, y0 + tube / 2, z, x1 - x0, tube, tube);
       ms.box(M, (x0 + x1) / 2, GH - tube / 2, z, x1 - x0, tube, tube);
-      ms.box(M, (x0 + x1) / 2, 0.09 + (GH - 0.09) * 0.42, z, x1 - x0, 0.03, 0.03);
-      ms.box(M, x0 + tube / 2, 0.09 + (GH - 0.09) / 2, z, tube, GH - 0.09, tube);
-      ms.box(M, x1 - tube / 2, 0.09 + (GH - 0.09) / 2, z, tube, GH - 0.09, tube);
-      const bars = Math.max(2, Math.round((x1 - x0) / 0.11));
-      for (let i = 1; i < bars; i++) ms.box(M, x0 + ((x1 - x0) * i) / bars, 0.09 + (GH - 0.09) / 2, z, 0.016, GH - 0.09 - 2 * tube, 0.016, -1, 'y+y-');
-      // lower sheet panel for privacy
-      ms.box(M, (x0 + x1) / 2, 0.09 + tube + (GH - 0.09) * 0.2, z, x1 - x0 - 2 * tube, (GH - 0.09) * 0.4 - tube, 0.004);
+      ms.box(M, x0 + tube / 2, y0 + gh / 2, z, tube, gh, tube);
+      ms.box(M, x1 - tube / 2, y0 + gh / 2, z, tube, gh, tube);
+      if (style === 'slats') {
+        // horizontal timber slats between steel stiles
+        const wood = built.get(mats.wood('#9a6238', false, 0.6));
+        const n = Math.max(3, Math.round((gh - 2 * tube) / 0.115));
+        const pitch = (gh - 2 * tube) / n;
+        for (let i = 0; i < n; i++) wood.box(M, (x0 + x1) / 2, y0 + tube + pitch * (i + 0.5), z, x1 - x0 - 2 * tube, pitch * 0.74, 0.022);
+        const stiles = Math.max(1, Math.round((x1 - x0) / 1.6));
+        for (let i = 1; i < stiles; i++) ms.box(M, x0 + ((x1 - x0) * i) / stiles, y0 + gh / 2, z - inward * 0.02, 0.04, gh - 2 * tube, 0.02);
+      } else if (style === 'sheet') {
+        // flush sheet panels with fine joints
+        const panels = Math.max(2, Math.round((x1 - x0) / 1.1));
+        const pw = (x1 - x0 - 2 * tube) / panels;
+        for (let i = 0; i < panels; i++) ms.box(M, x0 + tube + pw * (i + 0.5), y0 + gh / 2, z, pw - 0.012, gh - 2 * tube - 0.012, 0.012);
+      } else {
+        ms.box(M, (x0 + x1) / 2, y0 + gh * 0.42, z, x1 - x0, 0.03, 0.03);
+        const bars = Math.max(2, Math.round((x1 - x0) / 0.11));
+        for (let i = 1; i < bars; i++) ms.box(M, x0 + ((x1 - x0) * i) / bars, y0 + gh / 2, z, 0.016, gh - 2 * tube, 0.016, -1, 'y+y-');
+        // lower sheet panel for privacy
+        ms.box(M, (x0 + x1) / 2, y0 + tube + gh * 0.2, z, x1 - x0 - 2 * tube, gh * 0.4 - tube, 0.004);
+      }
       for (const wx of [x0 + 0.35, x1 - 0.35]) ms.rod(M, wx, 0.05, z - 0.02, wx, 0.05, z + 0.02, 0.05, 12, true);
       // the closed gate stops the walker like the wall does
       const off = (inward * (PW / 2 + 0.05));
@@ -136,5 +165,5 @@ export function buildSite(ctx: BuildCtx, group: THREE.Group): SiteBuild {
   }
   blob.dispose();
   built.flush(group, { name: 'site-built' });
-  return { wallRuns };
+  return { wallRuns, pillars };
 }

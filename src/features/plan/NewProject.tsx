@@ -17,6 +17,7 @@ const ACCEPT = 'application/pdf,image/png,image/jpeg,image/webp';
 
 export default function NewProject() {
   const input = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<'upload' | 'blank'>('upload');
   const [file, setFile] = useState<File | null>(null);
   const [pages, setPages] = useState<string[]>([]);
   const [page, setPage] = useState(1);
@@ -122,6 +123,16 @@ export default function NewProject() {
     go('#/plan');
   };
 
+  const startBlank = () => {
+    const title = name.trim() || 'My house';
+    const spec = newSpec(title, +floors);
+    spec.notes![0] = 'Drawn from scratch. Starting heights: plinth 0.45 m, floor to floor 3.05 m (10′), doors 2.1 m.';
+    const st = useStore.getState();
+    st.createProject({ id: uid('p'), name: title, spec, items: [] });
+    st.setDisplay({ level: 'all', cutWalls: false, structure: false });
+    go('#/plan');
+  };
+
   const read = reading?.ok ? reading : null;
   const lines = read ? describeReading(read) : [];
 
@@ -135,11 +146,19 @@ export default function NewProject() {
         <section>
           <h1 className="wide text-3xl font-extrabold tracking-[-0.02em] sm:text-4xl">Your plan, in 3D</h1>
           <p className="mt-2 max-w-[58ch] text-base text-muted-foreground">
-            Upload the floor plan. A PDF from CAD is read right here by the site (walls, doors, rooms, stairs, scale) and nothing leaves your device.
+            Start from scratch without a file, or upload a floor plan. A PDF from CAD is read right here by the site (walls, doors, rooms, stairs, scale) and nothing leaves your device.
             {gemini ? ' A photo, a scan or a sheet the site cannot read is sent to Google Gemini to be understood; the house is still built here.' : ' A photo or scan is traced by hand.'}
           </p>
 
-          <div
+          <Segmented className="mt-5" label="Plan starting point" value={mode} onChange={setMode} options={[{ value: 'upload', label: 'Upload a drawing' }, { value: 'blank', label: 'Start from scratch' }]} />
+
+          {mode === 'blank' ? (
+            <div className="mt-6 flex min-h-[300px] flex-col items-center justify-center rounded-xl border border-border-strong bg-surface/80 p-6 text-center">
+              <PencilRuler className="size-8 text-primary" />
+              <h2 className="mt-3 text-lg font-semibold">A blank canvas for your house</h2>
+              <p className="mt-2 max-w-sm text-sm text-muted-foreground">Draw walls, add doors and windows, mark rooms and stairs, then build your plan in 3D. No PDF or image needed.</p>
+            </div>
+          ) : <div
             onDragOver={(e) => { e.preventDefault(); setOver(true); }}
             onDragLeave={() => setOver(false)}
             onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) take(f); }}
@@ -179,16 +198,26 @@ export default function NewProject() {
               </div>
             )}
             <input ref={input} type="file" accept={ACCEPT} hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) take(f); e.target.value = ''; }} />
-          </div>
-          {error && <p className="mt-3 text-sm font-medium text-primary" role="alert">{error}</p>}
-          {busy && <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground" role="status"><span className="size-2 animate-pulse rounded-full bg-primary" />{busy}</p>}
+          </div>}
+          {mode === 'upload' && error && <p className="mt-3 text-sm font-medium text-primary" role="alert">{error}</p>}
+          {mode === 'upload' && busy && <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground" role="status"><span className="size-2 animate-pulse rounded-full bg-primary" />{busy}</p>}
         </section>
 
         <aside className="h-fit rounded-xl border border-border bg-surface p-5 shadow-panel lg:mt-[92px]">
           <div className="grid gap-4">
             <Field label="Name of the house"><TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sharma residence" /></Field>
 
-            {read ? (
+            {mode === 'blank' ? (
+              <>
+                <div className="grid gap-1 text-[13px]">
+                  <span className="text-muted-foreground">Floors on the plan</span>
+                  <Segmented className="w-fit" label="Floors" value={floors} onChange={setFloors} options={[{ value: '1', label: 'G' }, { value: '2', label: 'G + 1' }, { value: '3', label: 'G + 2' }]} />
+                </div>
+                <p className="border-t border-border pt-4 text-[13px] text-muted-foreground">Start with the Wall tool and click each corner. Use the room and opening tools to finish your layout, then choose Build 3D.</p>
+                <Button variant="primary" size="lg" onClick={startBlank}><PencilRuler /> Create blank plan <ArrowRight /></Button>
+                <p className="text-xs text-muted-foreground">Your plan is saved in this browser as you work.</p>
+              </>
+            ) : read ? (
               <>
                 {read.by === 'gemini' ? (
                   <div className="rounded-md border border-warning/50 bg-[color-mix(in_oklab,var(--warning)_10%,transparent)] p-3">

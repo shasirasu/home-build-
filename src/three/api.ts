@@ -36,6 +36,16 @@ export interface DisplayOptions {
   showSite: boolean; // plot, lawn, compound wall, gate, paving
   /** Hour of day 6..19 for the sun position (shadows); north from spec.north. */
   sunHour: number;
+  /**
+   * Night: dark sky, moonlight, and the outdoor lights of spec.exterior.design.lighting switched on (with their
+   * colour and brightness). `sunHour` is ignored while it is true.
+   */
+  night: boolean;
+  /**
+   * Main switch of the outdoor lights (default true). Off: every light of the design is off at night (no glow, no
+   * lamps, windows dark too); the fittings themselves stay. Has no effect by day.
+   */
+  lightsOn: boolean;
   theme: 'light' | 'dark';
 }
 

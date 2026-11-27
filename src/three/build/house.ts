@@ -6,7 +6,9 @@ import type { HouseSpec } from '@/types/house';
 import { disposeGeometries } from '../core/batch';
 import { orectFromSeg, type ORect } from '../core/geo';
 import type { MaterialLib } from '../materials';
+import { buildFacade, facadeInfo, type FacadeInfo } from './facade';
 import { buildFloors } from './floors';
+import { buildLights, type LightsBuild } from './lights';
 import { buildModel, findMainDoor, type HouseModel, type LevelModel, type OpeningModel } from './model';
 import { buildOpenings, type DoorLeaf } from './openings';
 import { buildRoof } from './roof';
@@ -56,6 +58,8 @@ export interface HouseView {
   mainDoor: OpeningModel | null;
   /** outward direction of the entrance in plan (unit), or null */
   front: [number, number] | null;
+  facade: FacadeInfo;
+  lights: LightsBuild;
 }
 
 const group = (name: string, parent?: THREE.Object3D) => {
@@ -67,7 +71,6 @@ const group = (name: string, parent?: THREE.Object3D) => {
 
 export function buildHouse(spec: HouseSpec, mats: MaterialLib): HouseView {
   const model = buildModel(spec);
-  const ctx: BuildCtx = { model, mats };
   const root = group('house');
   const mainDoor = findMainDoor(model);
   let front: [number, number] | null = null;
@@ -75,6 +78,8 @@ export function buildHouse(spec: HouseSpec, mats: MaterialLib): HouseView {
     const s = mainDoor.outSide !== 0 ? mainDoor.outSide : 1;
     front = [mainDoor.wall.nx * s, mainDoor.wall.ny * s];
   }
+  const facade = facadeInfo(model, mainDoor, front);
+  const ctx: BuildCtx = { model, mats, facade };
 
   const levels: LevelView[] = [];
   const doors: DoorLeaf[] = [];
@@ -108,12 +113,21 @@ export function buildHouse(spec: HouseSpec, mats: MaterialLib): HouseView {
     structure = buildStructure(ctx, { finish: levels.map((l) => l.finish), struct: levels.map((l) => l.struct), roofFinish: roof.finish, roofStruct: roof.struct });
   } catch (e) { console.warn('[HouseViewer] structure failed', e); }
 
+  try { buildFacade(model, mats, facade, { levels: levels.map((l) => l.finish), roof: roof.finish }); } catch (e) { console.warn('[HouseViewer] facade failed', e); }
+
   const site = group('site', root);
-  let siteBuild: SiteBuild = { wallRuns: [] };
+  let siteBuild: SiteBuild = { wallRuns: [], pillars: [] };
   try { siteBuild = buildSite(ctx, site); } catch (e) { console.warn('[HouseViewer] site failed', e); }
 
+  let lights: LightsBuild = { night: [], panes: [], lamps: [], counts: {} };
+  try {
+    lights = buildLights(model, mats, facade, siteBuild, structure.freeColumns, {
+      levels: levels.map((l) => ({ fittings: l.finish, root: l.group })), roof: { fittings: roof.finish, root: roof.group }, site,
+    });
+  } catch (e) { console.warn('[HouseViewer] lights failed', e); }
+
   root.updateMatrixWorld(true);
-  return { model, ctx, root, levels, roof, site, siteBuild, structure, doors, mainDoor, front };
+  return { model, ctx, root, levels, roof, site, siteBuild, structure, doors, mainDoor, front, facade, lights };
 }
 
 export function disposeHouse(view: HouseView): void {

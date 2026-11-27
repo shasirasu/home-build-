@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { Beam, Column } from '@/types/house';
 import { BatchSet } from '../core/batch';
 import { clamp, finite, orectFromSeg, pointInORect, pointInPoly, type ORect } from '../core/geo';
+import { zoneCladding } from './facade';
 import { roomAt, type HouseModel, type LevelModel } from './model';
 import { FLOOR_GAP } from './floors';
 import type { BuildCtx } from './walls';
@@ -65,7 +66,8 @@ export function buildStructure(ctx: BuildCtx, groups: StructureGroups): Structur
   }
   if (!N) return { columns, beams, freeColumns, levelColumns, beamRects, footTop };
 
-  const extColour = model.spec.exterior?.wall ?? '#ece5d6';
+  const facade = ctx.facade;
+  const extMat = (lm: LevelModel) => mats.cladding(zoneCladding(facade, lm.index > 0 ? 'upper' : 'ground'), facade.images);
   const sets = () => Array.from({ length: N + 1 }, () => new BatchSet()); // last = roof
   const colStruct = sets(), colFinish = sets(), beamStruct = sets(), beamFinish = sets(), footStruct = new BatchSet();
   const colMat = mats.rcc('column', true);
@@ -87,9 +89,13 @@ export function buildStructure(ctx: BuildCtx, groups: StructureGroups): Structur
       const floorY = room ? room.floorY : lm.index === 0 && !(lm.footprint.length >= 3 && pointInPoly(c.x, c.y, lm.footprint)) ? 0 : lm.elevation;
       let topY = lm.ceilingY;
       for (const br of beamRects) if (br.bottom > floorY + 1 && br.bottom < topY && pointInORect(br.rect, c.x, c.y, 0.02)) topY = br.bottom;
-      const shaft = colFinish[lm.index].get(outdoors ? mats.paint(extColour) : mats.paint(room?.room.wallColor ?? '#f1ede4'));
+      // a column standing outdoors is finished like the walls of its storey (never with a stretched picture)
+      const outMat = extMat(lm).userData.fit ? mats.paint('#f3f1ec') : extMat(lm);
+      const shaft = colFinish[lm.index].get(outdoors ? outMat : mats.paint(room?.room.wallColor ?? '#f1ede4'));
       const trim = colFinish[lm.index].get(mats.trim());
       shaft.box(null, c.x, (floorY + topY) / 2, c.y, c.w, topY - floorY, c.d, ci, 'y-y+');
+      // moulded base and cap belong to the traditional look; a modern column is a plain shaft
+      if (outdoors && !facade.traditional) return;
       const bh = Math.min(0.14, (topY - floorY) * 0.1);
       trim.box(null, c.x, floorY + bh / 2, c.y, c.w + 0.07, bh, c.d + 0.07, ci, 'y-');
       trim.box(null, c.x, floorY + bh + 0.015, c.y, c.w + 0.035, 0.03, c.d + 0.035, ci, 'y-');
@@ -125,7 +131,8 @@ export function buildStructure(ctx: BuildCtx, groups: StructureGroups): Structur
     const below = levels[Math.min(N - 1, Math.max(0, owner - 1))];
     const room = roomAt(below, (b.a[0] + b.b[0]) / 2, (b.a[1] + b.b[1]) / 2);
     const indoor = !!room && !room.room.outdoor;
-    const mat = indoor ? mats.ceiling() : mats.paint(extColour, false);
+    const bandMat = mats.cladding(zoneCladding(facade, 'band'), facade.images, false);
+    const mat = indoor ? mats.ceiling() : bandMat.userData.fit ? mats.paint('#f3f1ec', false) : bandMat;
     const drop = FLOOR_GAP + 0.002;
     const depth = b.depth - drop;
     if (depth > 0.01) beamFinish[owner].get(mat).box(M, rect.len / 2, b.top - drop - depth / 2, 0, rect.len + b.width, depth, b.width, bi, 'y+');

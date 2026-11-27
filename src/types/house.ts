@@ -211,6 +211,75 @@ export interface PlanUnderlay {
   rotation?: number;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Exterior design: what the outside is finished in, the modern details added to it, and its lights.
+// The catalogue (materials, styles, light types) is in src/data/exterior.ts.
+
+/** How one outside surface is finished. */
+export interface Cladding {
+  /** id of a facade material in CLADDINGS, or 'image' for the owner's own picture. */
+  material: string;
+  /** Paint colour / tint, for the materials that take one. */
+  color?: string;
+  /** material 'image': key of the picture in ExteriorDesign.images. */
+  image?: string;
+  /** material 'image': metres one copy of the picture covers across (its height follows the picture's shape). */
+  size?: number;
+  /** material 'image': 'tile' repeats the picture at `size`; 'fit' stretches one copy over each wall. */
+  fit?: 'tile' | 'fit';
+}
+
+/** The surfaces of the outside that can each take their own finish. */
+export type ExteriorZone = 'ground' | 'upper' | 'feature' | 'parapet' | 'band' | 'plinth' | 'boundary';
+
+/** The kinds of outdoor light. Each is placed by rule from the house (see src/three/build/lights.ts). */
+export type ExteriorLightKind = 'wall' | 'uplight' | 'soffit' | 'downlight' | 'roofline' | 'bollard' | 'gate' | 'windows';
+
+export interface ExteriorLighting {
+  /** Which kinds are installed. */
+  kinds: Partial<Record<ExteriorLightKind, boolean>>;
+  /** Colour of the light. */
+  color: string;
+  /** 0.3 (dim) … 1.6 (bright). */
+  brightness: number;
+}
+
+export interface ExteriorImage {
+  /** The picture itself, scaled down, as a data URL: it travels with the project. */
+  url: string;
+  name: string;
+  /** width / height */
+  aspect: number;
+}
+
+export interface ExteriorDesign {
+  /** id of the style in EXTERIOR_STYLES this design started from. */
+  style: string;
+  zones: Record<ExteriorZone, Cladding>;
+  /** Where the feature finish goes: nowhere, the whole front, one storey of the front, or a tall bay at the entrance. */
+  feature: 'none' | 'front' | 'front-upper' | 'front-ground' | 'entrance';
+  /** Around the windows: a continuous lintel band (traditional), a projecting box frame, a thin hood, or nothing. */
+  windows: 'band' | 'box' | 'hood' | 'none';
+  /** A deep frame projecting around the front of the upper storey. */
+  frame: boolean;
+  /** Vertical fins screening the entrance bay of the upper storey. */
+  fins: 'none' | 'wood' | 'metal';
+  /** The parapet on the front: solid wall, glass, or a steel rail. The other sides stay solid. */
+  parapet: 'solid' | 'glass' | 'rail';
+  /** Roof slab projecting past the walls, metres (0 = flush). */
+  overhang: number;
+  /** A thin canopy over the main door, where nothing covers it already. */
+  canopy: boolean;
+  /** A pergola on the terrace, over the front. */
+  pergola: boolean;
+  gate: 'bars' | 'slats' | 'sheet';
+  /** Colour of the frame, window boxes, hoods, metal fins, canopy and gate. */
+  accent: string;
+  lighting: ExteriorLighting;
+  /** The owner's own pictures used as finishes ("mapping"), by key. */
+  images?: Record<string, ExteriorImage>;
+}
+
 export interface HouseSpec {
   id: string;
   name: string;
@@ -222,8 +291,11 @@ export interface HouseSpec {
   levels: Level[];
   structure: Structure;
   roof: Roof;
-  /** Outside faces of exterior walls, the floor band between storeys and the plinth. */
-  exterior: { wall: string; band: string; plinth: string };
+  /**
+   * The outside of the house. `wall` / `band` / `plinth` are the plain colours of the first version; `design` is the
+   * full exterior design (facade materials, details, lights). A house without one gets the default modern style.
+   */
+  exterior: { wall: string; band: string; plinth: string; design?: ExteriorDesign };
   site?: Site;
   underlay?: PlanUnderlay;
   notes?: string[];

@@ -2,6 +2,7 @@ import { Copy, Crosshair, Footprints, Lock, RotateCcw, RotateCw, Trash2, Unlock,
 import type { ReactNode } from 'react';
 import { catalogByKind } from '@/data/catalog';
 import { FINISHES, PAINTS, finishById } from '@/data/finishes';
+import { resolveExterior } from '@/data/exterior';
 import { useProject, useStore } from '@/lib/store';
 import { dist, labelPoint, polygonArea, polygonPerimeter, uid, wallHeight, wallLength } from '@/lib/geom';
 import { fmtArea, fmtINRRange, fmtLen, fmtSection, parseLen } from '@/lib/units';
@@ -137,6 +138,9 @@ export function Inspector() {
           </div>
           <div>
             <p className="mb-1.5 text-[13px] text-muted-foreground">Wall paint</p>
+            {r.outdoor && resolveExterior(spec).windows !== 'band' && (
+              <p className="mb-2 text-xs leading-snug text-muted-foreground">The house walls around it take the outside finish, set in the Outside tab. This paint is for any other wall.</p>
+            )}
             <div className="flex flex-wrap gap-2">
               {PAINTS.map((p) => <Swatch key={p.id} color={p.hex} title={p.name} active={r.wallColor.toLowerCase() === p.hex} onClick={() => patchRoom((x) => { x.wallColor = p.hex; })} />)}
             </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Calculator, DoorOpen, Home, ListChecks, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react';
+import { Calculator, DoorOpen, Home, ListChecks, PaintRoller, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react';
 import type { HouseViewerAPI } from '@/three/api';
 import type { CatalogItem } from '@/data/catalog';
 import type { PlacedItem } from '@/types/house';
@@ -18,10 +18,12 @@ import { AddPanel } from './panels/AddPanel';
 import { ItemsPanel } from './panels/ItemsPanel';
 import { QuantitiesPanel } from './panels/QuantitiesPanel';
 import { ProjectPanel } from './panels/ProjectPanel';
+import { ExteriorPanel } from './panels/ExteriorPanel';
 
-type Tab = 'rooms' | 'add' | 'items' | 'qty' | 'house';
+type Tab = 'rooms' | 'outside' | 'add' | 'items' | 'qty' | 'house';
 const TABS: { id: Tab; label: string; icon: typeof Home }[] = [
   { id: 'rooms', label: 'Rooms', icon: DoorOpen },
+  { id: 'outside', label: 'Outside', icon: PaintRoller },
   { id: 'add', label: 'Add', icon: Plus },
   { id: 'items', label: 'Items', icon: ListChecks },
   { id: 'qty', label: 'Quantities', icon: Calculator },
@@ -37,7 +39,7 @@ export default function Studio({ params }: { params: URLSearchParams }) {
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 900);
   const [placing, setPlacing] = useState<string | null>(null);
 
-  // Deep links from the intro: ?walk=1 | ?walk=stair | ?focus=<roomId> | ?structure=1 | ?level=<id>
+  // Deep links from the intro: ?walk=1 | ?walk=stair | ?focus=<roomId> | ?structure=1 | ?level=<id> | ?night=1 | ?tab=outside
   const applyParams = useCallback(() => {
     let st = useStore.getState();
     const v = viewerRef.current;
@@ -47,6 +49,9 @@ export default function Studio({ params }: { params: URLSearchParams }) {
     if (pid && st.projects[pid] && st.currentId !== pid) { st.openProject(pid); st = useStore.getState(); }
     const spec = st.current().spec;
     if (params.get('structure')) st.setDisplay({ structure: true, level: 'all' });
+    if (params.has('night')) st.setDisplay({ night: params.get('night') !== '0' });
+    const t = params.get('tab');
+    if (t && TABS.some((x) => x.id === t)) { setTab(t as Tab); setPanelOpen(true); }
     const level = params.get('level');
     if (level && spec.levels.some((l) => l.id === level)) st.setDisplay({ level, cutWalls: true });
     const focus = params.get('focus');
@@ -79,6 +84,10 @@ export default function Studio({ params }: { params: URLSearchParams }) {
         if (it && !it.locked) { st.updateItems((items) => items.filter((i) => i.uid !== id)); st.setSelection(null); }
       }
       if (e.key === 'Escape' && st.mode !== 'walk' && !placing) st.setSelection(null);
+      // walking: F hides the furniture (and lets you walk through where it stood) or brings it back
+      if (st.mode === 'walk' && !e.metaKey && !e.ctrlKey && !e.altKey && e.code === 'KeyF') st.setDisplay({ showFurniture: st.display.showFurniture === false });
+      // L switches the outdoor lights off / on at night (anywhere but in a text field)
+      if (st.display.night && !e.metaKey && !e.ctrlKey && !e.altKey && e.code === 'KeyL') st.setDisplay({ lightsOn: st.display.lightsOn === false });
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
@@ -158,6 +167,7 @@ export default function Studio({ params }: { params: URLSearchParams }) {
             </nav>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {tab === 'rooms' && <RoomsPanel />}
+              {tab === 'outside' && <ExteriorPanel />}
               {tab === 'add' && <AddPanel onAdd={startPlace} onFurnish={furnishEmpty} />}
               {tab === 'items' && <ItemsPanel />}
               {tab === 'qty' && <QuantitiesPanel />}

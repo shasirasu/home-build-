@@ -1,12 +1,17 @@
-import { LogOut } from 'lucide-react';
+import { Lightbulb, LightbulbOff, LogOut, Sofa } from 'lucide-react';
 import { useProject, useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/controls';
+import { cn } from '@/lib/utils';
 
 export function WalkHud() {
   const mode = useStore((s) => s.mode);
   const walkRoom = useStore((s) => s.walkRoom);
   const setMode = useStore((s) => s.setMode);
+  const furniture = useStore((s) => s.display.showFurniture !== false);
+  const night = useStore((s) => !!s.display.night);
+  const lightsOn = useStore((s) => s.display.lightsOn !== false);
+  const setDisplay = useStore((s) => s.setDisplay);
   const project = useProject();
   if (mode !== 'walk') return null;
   const lv = project.spec.levels.find((l) => l.id === walkRoom.levelId);
@@ -25,10 +30,32 @@ export function WalkHud() {
           <span className="flex gap-0.5"><Kbd>W</Kbd><Kbd>A</Kbd><Kbd>S</Kbd><Kbd>D</Kbd></span><span>move</span>
           <span><Kbd>Shift</Kbd></span><span>walk faster</span>
           <span className="text-foreground">Click + mouse</span><span>look around</span>
+          <span><Kbd>F</Kbd></span><span>furniture {furniture ? 'off (walk through)' : 'back on'}</span>
+          {night && <><span><Kbd>L</Kbd></span><span>lights {lightsOn ? 'off' : 'on'}</span></>}
           <span><Kbd>Esc</Kbd></span><span>free the mouse</span>
         </div>
       </div>
-      <div className="absolute right-3 bottom-3 z-10">
+      <div className="absolute right-3 bottom-3 z-10 flex gap-2">
+        {night && (
+          <Button
+            variant="secondary"
+            className="shadow-panel"
+            aria-pressed={!lightsOn}
+            title={lightsOn ? 'Switch every outdoor light off (L)' : 'Switch the outdoor lights back on (L)'}
+            onClick={() => setDisplay({ lightsOn: !lightsOn })}
+          >
+            {lightsOn ? <><LightbulbOff /> Lights off</> : <><Lightbulb /> Lights on</>}
+          </Button>
+        )}
+        <Button
+          variant="secondary"
+          className={cn('shadow-panel', !furniture && 'border-primary/50 bg-primary-soft text-primary hover:bg-primary-soft')}
+          aria-pressed={!furniture}
+          title={furniture ? 'Hide the furniture and walk through where it stood (F)' : 'Show the furniture again (F)'}
+          onClick={() => setDisplay({ showFurniture: !furniture })}
+        >
+          <Sofa /> {furniture ? 'Hide furniture' : 'Furniture hidden'}
+        </Button>
         <Button variant="secondary" className="shadow-panel" onClick={() => setMode('orbit')}><LogOut /> Leave walk</Button>
       </div>
       {/* crosshair */}

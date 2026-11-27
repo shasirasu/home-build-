@@ -22,6 +22,8 @@ interface Collider {
   rect: ORect;
   y0: number;
   y1: number;
+  /** furniture the walker was standing in when it became solid: let through until they have stepped out of it */
+  free?: boolean;
 }
 
 interface StepBlock {
@@ -93,13 +95,44 @@ export class WalkWorld {
     void model;
   }
 
-  setItems(entries: Iterable<ItemEntry>): void {
+  /** Furniture stops the walker only while it is shown. */
+  private itemsSolid = true;
+
+  /**
+   * The furniture to walk around. `at` = where the walker stands now (plan), when there is one: a piece that lands
+   * on top of them does not trap them.
+   */
+  setItems(entries: Iterable<ItemEntry>, at?: Vec2): void {
     this.items = [];
     for (const e of entries) {
       if (e.mount === 'ceiling' && e.item.h < 1.2) continue;
       if (e.item.h < 0.05) continue;
       this.items.push({ rect: e.rect, y0: e.bottom, y1: e.bottom + e.item.h });
     }
+    if (at) this.freeItemsAt(at[0], at[1]);
+  }
+
+  /**
+   * Furniture hidden (furniture switched off, structure view) = nothing to bump into: the walker goes straight
+   * through where it stood. Walls, railings, stairs, columns, the compound wall and the gate always block.
+   * When it comes back while the walker stands inside a piece, that piece lets them walk out first.
+   */
+  setItemsSolid(solid: boolean, at?: Vec2): void {
+    if (solid === this.itemsSolid) return;
+    this.itemsSolid = solid;
+    for (const c of this.items) c.free = false;
+    if (solid && at) this.freeItemsAt(at[0], at[1]);
+  }
+
+  get furnitureSolid() { return this.itemsSolid; }
+
+  private freeItemsAt(x: number, y: number): void {
+    for (const c of this.items) c.free = distToORect(c.rect, x, y) < ITEM_RADIUS;
+  }
+
+  /** The walker is now at (x, y): pieces they have stepped clear of are solid again. */
+  leftItems(x: number, y: number): void {
+    for (const c of this.items) if (c.free && distToORect(c.rect, x, y) > ITEM_RADIUS + 0.03) c.free = false;
   }
 
   /** Every walkable surface height under a plan point. */
@@ -160,7 +193,7 @@ export class WalkWorld {
         if (p) { x = p[0]; y = p[1]; moved = true; }
       };
       for (const c of this.statics) hit(c, RADIUS);
-      for (const c of this.items) hit(c, ITEM_RADIUS);
+      if (this.itemsSolid) for (const c of this.items) if (!c.free) hit(c, ITEM_RADIUS);
       // stair blocks too high to step on and too low to walk under
       for (const s of this.steps) {
         if (s.top <= ground + STEP_UP + 1e-3 || s.under >= ground + MIN_CLEAR) continue;
@@ -435,6 +468,7 @@ export class WalkControls {
     if (g < this.ground - MAX_DROP) return false;
     if (w.ceilingAt(nx, ny, g, 0.1) - g < MIN_CLEAR) return false;
     this.x = nx; this.y = ny; this.ground = g;
+    w.leftItems(nx, ny);
     return true;
   }
 }

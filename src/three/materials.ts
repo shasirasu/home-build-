@@ -2,9 +2,10 @@
 // handful of draw calls, and everything is disposed in one place.
 
 import * as THREE from 'three';
+import { claddingById } from '@/data/exterior';
 import { finishById } from '@/data/finishes';
-import type { Finish } from '@/types/house';
-import { paintFinish, paintedNamed, toTexture, type NamedTexture } from './textures';
+import type { Cladding, ExteriorImage, Finish } from '@/types/house';
+import { glowTexture, paintCladding, paintFinish, paintedNamed, toTexture, type GlowKind, type NamedTexture } from './textures';
 
 /** Colours of the engineering (structure) view. */
 export const RCC = {
@@ -18,6 +19,12 @@ export const RCC = {
 } as const;
 
 export const ACCENT = '#2f7df6';
+
+/** How strongly each kind of light picture is drawn at brightness 1 (tuned on screen against the night sky). */
+const GLOW = { updown: 0.62, up: 0.6, pool: 0.4, wash: 0.5, halo: 0.75 } as const;
+
+/** Dark anodised / powder-coated metal of the modern details when no accent colour is given. */
+export const DARK_METAL = '#2b2d31';
 
 export class MaterialLib {
   anisotropy = 4;
@@ -121,6 +128,10 @@ export class MaterialLib {
   ceiling() {
     return this.remember('ceiling', () => new THREE.MeshStandardMaterial({ color: '#fbfaf6', roughness: 0.96, metalness: 0, envMapIntensity: 0.6, emissive: '#fff8ea', emissiveIntensity: 0.3 }), false);
   }
+  /** How much the ceilings light themselves: 0.3 by day; turned down at night, when nothing bounces up off the floor. */
+  setCeilingGlow(level: number): void {
+    this.ceiling().emissiveIntensity = Math.max(0, level);
+  }
   cap() { return this.remember('cap', () => new THREE.MeshStandardMaterial({ color: '#3d3a36', roughness: 0.9, metalness: 0, envMapIntensity: 0.3 }), false); }
   reveal() { return this.paint('#f4f1ea', true); }
   trim() { return this.paint('#f7f4ee', true, 0.85); }
@@ -132,6 +143,104 @@ export class MaterialLib {
   emissive(color: string) {
     return this.remember(`emissive|${color}`, () => new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1, roughness: 0.6 }), false);
   }
+
+  // ---- the outside ------------------------------------------------------------------------------------------
+  /** Called when a texture that loads late (the owner's picture) is ready, so the view can redraw. */
+  onChange: (() => void) | null = null;
+
+  /**
+   * A facade finish: paint, one of the painted claddings, or the owner's own picture. UVs are metres (u along the
+   * wall, v up it), except for a picture set to 'fit' (`material.userData.fit`), which takes 0..1 over the wall.
+   */
+  cladding(c: Cladding | undefined, images?: Record<string, ExteriorImage>, clip = true): THREE.MeshStandardMaterial {
+    if (c?.material === 'image') {
+      const img = images?.[c.image ?? ''];
+      if (!img?.url) return this.paint('#f3f1ec', clip);
+      const fit = c.fit === 'fit';
+      const size = Math.max(0.2, Math.min(30, Number(c.size) || 2.4));
+      const key = `image|${c.image}|${fit ? 'fit' : size.toFixed(2)}`;
+      const m = this.remember(key, () => new THREE.MeshStandardMaterial({
+        map: this.texture(key, () => {
+          const t = new THREE.TextureLoader().load(img.url, () => this.onChange?.(), undefined, () => console.warn('[HouseViewer] the picture for a facade finish could not be read'));
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.anisotropy = this.anisotropy;
+          const aspect = Number.isFinite(img.aspect) && img.aspect > 0.05 ? img.aspect : 1;
+          if (!fit) t.repeat.set(1 / size, aspect / size);
+          return t;
+        }),
+        color: '#ffffff', roughness: 0.82, metalness: 0, envMapIntensity: 0.4,
+      }), clip);
+      m.userData.fit = fit;
+      return m;
+    }
+    const def = claddingById(c?.material);
+    const color = def.tintable ? safeColor(c?.color, def.color) : def.color;
+    if (def.id === 'paint') return this.paint(color, clip, def.roughness);
+    const painted = paintCladding(def.id, color);
+    if (!painted) return this.paint(color, clip, def.roughness);
+    const key = `clad|${def.id}|${color}`;
+    return this.remember(key, () => new THREE.MeshStandardMaterial({
+      map: this.texture(key, () => toTexture(painted, this.anisotropy)),
+      color: '#ffffff', roughness: def.roughness, metalness: def.metalness ?? 0, envMapIntensity: def.metalness ? 0.9 : 0.45,
+    }), clip);
+  }
+
+  // ---- outdoor lights ---------------------------------------------------------------------------------------
+  // Every one of these comes in two copies: one that the dollhouse cut slices with the walls it sits on (`clip`),
+  // one that it leaves alone (the site: gate lamps, bollards).
+  private lightColor = new THREE.Color('#ffd0a0');
+  private lightLevel = 0;
+
+  /** The glowing part of a fitting: off-white by day, lit at night. */
+  lamp(clip = false): THREE.MeshStandardMaterial {
+    return this.remember('lamp', () => new THREE.MeshStandardMaterial({ color: '#f1eee6', emissive: this.lightColor.clone(), emissiveIntensity: 0, roughness: 0.5, metalness: 0, envMapIntensity: 0.4 }), clip);
+  }
+
+  /** Light landing on a wall or the ground: an additive picture, tinted by the colour of the lamps. */
+  glow(kind: GlowKind, clip = false): THREE.MeshBasicMaterial {
+    return this.remember(`glow|${kind}`, () => new THREE.MeshBasicMaterial({
+      map: this.texture(`glow|${kind}`, () => glowTexture(kind)), color: '#000000', transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false, toneMapped: false, fog: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    }), clip);
+  }
+
+  /** A room seen from outside at night, lit or dark (drawn just behind the glass, facing out only). */
+  windowGlow(clip = true): THREE.MeshBasicMaterial {
+    return this.remember('window-glow', () => new THREE.MeshBasicMaterial({ map: this.texture('glow|window', () => glowTexture('window')), color: '#000000', toneMapped: false, fog: false, side: THREE.FrontSide }), clip);
+  }
+
+  /** The soft bloom around every lamp (one point per lamp). */
+  halo(clip = false): THREE.PointsMaterial {
+    return this.remember('halo', () => new THREE.PointsMaterial({
+      map: this.texture('glow|halo', () => glowTexture('halo')), color: '#000000', size: 0.9, sizeAttenuation: true, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, fog: false,
+    }), clip);
+  }
+
+  /**
+   * Switch the outdoor lights: `level` 0 = off … about 1 = on at the chosen brightness. `rooms` = the rooms behind
+   * the windows are lit too (otherwise the windows are dark).
+   */
+  setLighting(color: string, level: number, rooms = true): void {
+    this.lightColor.set(safeColor(color, '#ffd0a0'));
+    this.lightLevel = Math.max(0, level);
+    const c = this.lightColor, lv = this.lightLevel;
+    const gain: Record<GlowKind, number> = { updown: GLOW.updown, up: GLOW.up, pool: GLOW.pool, wash: GLOW.wash, halo: GLOW.halo, window: 0 };
+    for (const clip of [false, true]) {
+      const lamp = this.lamp(clip);
+      lamp.emissive.copy(c);
+      lamp.emissiveIntensity = lv > 0 ? 0.9 + lv * 0.9 : 0;
+      for (const k of ['updown', 'up', 'pool', 'wash'] as const) this.glow(k, clip).color.copy(c).multiplyScalar(gain[k] * lv);
+      this.halo(clip).color.copy(c).multiplyScalar(gain.halo * Math.min(1.3, lv));
+    }
+    // lit rooms: the colour of the lamps, a touch whiter. They sit behind tinted glass, which greys them, so they
+    // are drawn richer than they should look; and they do not get brighter than a curtain can.
+    if (lv > 0 && rooms) this.windowGlow().color.copy(c).lerp(new THREE.Color('#ffe6c4'), 0.25).multiplyScalar(Math.min(1.35, 0.8 + lv * 0.45));
+    else this.windowGlow().color.set('#0c1017');
+  }
+
+  get lightsOn() { return this.lightLevel > 0; }
 
   // ---- structure view --------------------------------------------------------------------------------------
   rcc(kind: keyof typeof RCC, clip = false): THREE.MeshStandardMaterial {

@@ -549,3 +549,413 @@ export function radialAlphaTexture(): THREE.CanvasTexture {
   t.generateMipmaps = false;
   return t;
 }
+
+// ------------------------------------------------------------------------------------------------ facade claddings
+// One painter per facade material of src/data/exterior.ts. `color` is the material's base colour (the owner's tint).
+// All of them tile; `cover` is in metres, u along the wall and v up it.
+
+/** Rows × columns of rectangular units in running or stack bond, with joints and a little relief. */
+function paintCourses(o: {
+  W: number; H: number; cols: number; rows: number; base: string; joint: string; jointPx: number; vary: number;
+  bond: 'running' | 'stack'; relief: number; seed: number; unit?: (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: () => number, colour: string) => void;
+}): HTMLCanvasElement {
+  const { W, H, cols, rows, base, joint, jointPx, vary, bond, relief } = o;
+  const r = rng(o.seed);
+  const [c, ctx] = makeCanvas(W, H);
+  ctx.fillStyle = joint;
+  ctx.fillRect(0, 0, W, H);
+  const cw = W / cols, ch = H / rows;
+  for (let j = 0; j < rows; j++) {
+    const off = bond === 'running' && j % 2 ? cw / 2 : 0;
+    for (let i = -1; i < cols; i++) {
+      const colour = mix(base, r() < 0.5 ? '#ffffff' : '#000000', r() * vary);
+      const draw = (x: number) => {
+        const y = j * ch;
+        const x0 = x + jointPx / 2, y0 = y + jointPx / 2, w = cw - jointPx, h = ch - jointPx;
+        ctx.fillStyle = colour;
+        ctx.fillRect(x0, y0, w, h);
+        o.unit?.(ctx, x0, y0, w, h, r, colour);
+        if (relief > 0) {
+          ctx.fillStyle = `rgba(255,255,255,${relief})`;
+          ctx.fillRect(x0, y0, w, Math.max(1, h * 0.08));
+          ctx.fillStyle = `rgba(0,0,0,${relief * 1.3})`;
+          ctx.fillRect(x0, y0 + h - Math.max(1, h * 0.1), w, Math.max(1, h * 0.1));
+        }
+      };
+      const x = i * cw + off;
+      if (x + cw <= 0) continue;
+      draw(x);
+      if (x + cw > W) draw(x - W);
+    }
+  }
+  return c;
+}
+
+function paintCladdingRaw(id: string, base: string, seed: number): Painted | null {
+  const r = rng(seed);
+  switch (id) {
+    case 'plaster-texture': {
+      const W = 256, H = 256;
+      const [c, ctx] = makeCanvas(W, H);
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, W, H);
+      // a fine sand-faced grain; only a breath of cloudiness, or a wall of it looks stained
+      clouds(ctx, W, H, r, 'rgba(0,0,0,0.55)', 26, 0.03, [14, 70]);
+      clouds(ctx, W, H, r, 'rgba(255,255,255,0.7)', 20, 0.03, [14, 70]);
+      speckle(ctx, W, H, r, 13, 1);
+      return { canvas: c, cover: [1.1, 1.1] };
+    }
+    case 'plaster-groove': {
+      const W = 256, H = 256;
+      const [c, ctx] = makeCanvas(W, H);
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, W, H);
+      clouds(ctx, W, H, r, 'rgba(0,0,0,0.5)', 14, 0.04, [30, 90]);
+      speckle(ctx, W, H, r, 4, 1);
+      // a 20 mm groove every 600 mm: shadow inside, a light arris under it
+      for (const y of [0, H / 2]) {
+        ctx.fillStyle = mix(base, '#000000', 0.5);
+        ctx.fillRect(0, y, W, 4);
+        ctx.fillStyle = mix(base, '#000000', 0.25);
+        ctx.fillRect(0, y + 4, W, 1);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillRect(0, (y + H - 1) % H, W, 1);
+      }
+      return { canvas: c, cover: [1.2, 1.2] };
+    }
+    case 'stone-stack': {
+      // ledge stone: thin strips of uneven height and length
+      const W = 512, H = 512;
+      const [c, ctx] = makeCanvas(W, H);
+      ctx.fillStyle = mix(base, '#000000', 0.62);
+      ctx.fillRect(0, 0, W, H);
+      let y = 0;
+      while (y < H) {
+        let h = 14 + Math.floor(r() * 20);
+        if (H - y - h < 14) h = H - y;
+        let x = -Math.floor(r() * 120);
+        const start = x;
+        while (x < W + start + 1) {
+          const w = Math.min(60 + Math.floor(r() * 150), W + start - x);
+          if (w < 8) break;
+          const tone = (r() - 0.5) * 0.5;
+          const colour = mix(base, r() < 0.3 ? '#c9b38f' : base, r() * 0.25, tone * 0.6);
+          const piece = (px: number) => {
+            ctx.fillStyle = colour;
+            ctx.fillRect(px + 1, y + 1, w - 2, h - 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.16)';
+            ctx.fillRect(px + 1, y + 1, w - 2, 2);
+            ctx.fillStyle = 'rgba(0,0,0,0.28)';
+            ctx.fillRect(px + 1, y + h - 4, w - 2, 3);
+          };
+          piece(x);
+          if (x < 0) piece(x + W);
+          if (x + w > W) piece(x - W);
+          x += w;
+        }
+        y += h;
+      }
+      speckle(ctx, W, H, r, 9, 1);
+      return { canvas: c, cover: [1.6, 1.6] };
+    }
+    case 'stone-ashlar':
+    case 'stone-slate': {
+      const slate = id === 'stone-slate';
+      const W = 512, H = 512;
+      const c = paintCourses({
+        W, H, cols: 2, rows: 4, base, joint: mix(base, '#000000', slate ? 0.55 : 0.38), jointPx: slate ? 3 : 4, vary: slate ? 0.1 : 0.12, bond: 'running', relief: 0.07, seed,
+        unit: (ctx, x, y, w, h, rr) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, w, h);
+          ctx.clip();
+          for (let k = 0; k < 5; k++) {
+            const gx = x + rr() * w, gy = y + rr() * h, rad = 30 + rr() * 90;
+            const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, rad);
+            g.addColorStop(0, rr() < 0.5 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+          }
+          if (slate) {
+            // cleft streaks
+            ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+            for (let k = 0; k < 9; k++) {
+              ctx.lineWidth = 1 + rr() * 2;
+              ctx.beginPath();
+              const sy = y + rr() * h;
+              ctx.moveTo(x, sy);
+              ctx.bezierCurveTo(x + w * 0.3, sy + (rr() - 0.5) * 30, x + w * 0.7, sy + (rr() - 0.5) * 30, x + w, sy + (rr() - 0.5) * 20);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+        },
+      });
+      speckle(c.getContext('2d', { willReadFrequently: true })!, W, H, r, slate ? 5 : 8, 1);
+      return { canvas: c, cover: [1.2, 1.2] };
+    }
+    case 'laterite': {
+      const W = 512, H = 512;
+      const c = paintCourses({
+        W, H, cols: 4, rows: 8, base, joint: mix(base, '#3a2418', 0.7), jointPx: 4, vary: 0.14, bond: 'running', relief: 0.05, seed,
+        unit: (ctx, x, y, w, h, rr) => {
+          // the pitted, vesicular face of laterite: dark pores and ochre flecks
+          for (let k = 0; k < 46; k++) {
+            const px = x + 2 + rr() * (w - 4), py = y + 2 + rr() * (h - 4), s = 1 + rr() * 3.2;
+            ctx.fillStyle = rr() < 0.6 ? `rgba(50,22,12,${0.25 + rr() * 0.35})` : `rgba(226,170,96,${0.2 + rr() * 0.3})`;
+            ctx.beginPath();
+            ctx.ellipse(px, py, s, s * (0.6 + rr() * 0.6), rr() * 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        },
+      });
+      speckle(c.getContext('2d', { willReadFrequently: true })!, W, H, r, 10, 1);
+      return { canvas: c, cover: [1.6, 1.6] };
+    }
+    case 'wood-slat': {
+      // vertical battens, 45 mm on a 65 mm pitch, with a shadow gap between them
+      const W = 384, H = 512, n = 12;
+      const [c, ctx] = makeCanvas(W, H);
+      ctx.fillStyle = mix(base, '#000000', 0.88);
+      ctx.fillRect(0, 0, W, H);
+      const pw = W / n, bw = pw * 0.7;
+      for (let i = 0; i < n; i++) {
+        const x = i * pw + (pw - bw) / 2;
+        const colour = mix(base, r() < 0.5 ? '#e0b98a' : '#3a2010', r() * 0.2);
+        ctx.fillStyle = colour;
+        ctx.fillRect(x, 0, bw, H);
+        for (let g = 0; g < 9; g++) {
+          ctx.fillStyle = `rgba(40,20,8,${0.05 + r() * 0.13})`;
+          ctx.fillRect(x + r() * bw, 0, 0.6 + r() * 1.4, H);
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.16)';
+        ctx.fillRect(x, 0, 2, H);
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(x + bw - 3, 0, 3, H);
+      }
+      speckle(ctx, W, H, r, 4, 1);
+      return { canvas: c, cover: [0.78, 1.6] };
+    }
+    case 'wood-board': {
+      // horizontal boards on a 140 mm pitch with a shadow joint and the odd butt joint
+      const W = 512, H = 512, n = 8;
+      const [c, ctx] = makeCanvas(W, H);
+      const bh = H / n;
+      for (let j = 0; j < n; j++) {
+        const y = j * bh;
+        const colour = mix(base, r() < 0.5 ? '#e0b98a' : '#3a2010', r() * 0.22);
+        ctx.fillStyle = colour;
+        ctx.fillRect(0, y, W, bh);
+        for (let g = 0; g < 16; g++) {
+          ctx.fillStyle = `rgba(40,20,8,${0.04 + r() * 0.12})`;
+          ctx.fillRect(0, y + r() * bh, W, 0.6 + r() * 1.6);
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(0, y + 4, W, 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.62)';
+        ctx.fillRect(0, y, W, 4);
+        if (r() < 0.6) {
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          ctx.fillRect(Math.floor(r() * W), y + 4, 2, bh - 4);
+        }
+      }
+      speckle(ctx, W, H, r, 4, 1);
+      return { canvas: c, cover: [2.4, 1.12] };
+    }
+    case 'brick': {
+      const W = 512, H = 512;
+      const c = paintCourses({
+        W, H, cols: 4, rows: 8, base, joint: '#cfc8ba', jointPx: 6, vary: 0.2, bond: 'running', relief: 0.06, seed,
+        unit: (ctx, x, y, w, h, rr) => {
+          if (rr() < 0.35) {
+            ctx.fillStyle = `rgba(40,16,10,${0.08 + rr() * 0.16})`;
+            ctx.fillRect(x, y, w, h);
+          }
+        },
+      });
+      speckle(c.getContext('2d', { willReadFrequently: true })!, W, H, r, 10, 1);
+      return { canvas: c, cover: [0.96, 0.68] };
+    }
+    case 'concrete-board': {
+      // the print of 100 mm shuttering boards
+      const W = 512, H = 512, n = 12;
+      const [c, ctx] = makeCanvas(W, H);
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, W, H);
+      const bh = H / n;
+      for (let j = 0; j < n; j++) {
+        const y = j * bh;
+        ctx.fillStyle = r() < 0.5 ? `rgba(255,255,255,${r() * 0.07})` : `rgba(0,0,0,${r() * 0.07})`;
+        ctx.fillRect(0, y, W, bh);
+        for (let g = 0; g < 10; g++) {
+          ctx.fillStyle = `rgba(0,0,0,${0.02 + r() * 0.05})`;
+          ctx.fillRect(0, y + r() * bh, W, 1);
+        }
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        ctx.fillRect(0, y, W, 1.5);
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(0, y + 1.5, W, 1);
+      }
+      clouds(ctx, W, H, r, 'rgba(50,48,44,0.6)', 24, 0.1, [40, 150]);
+      clouds(ctx, W, H, r, 'rgba(255,255,255,0.7)', 18, 0.1, [40, 130]);
+      speckle(ctx, W, H, r, 6, 1);
+      return { canvas: c, cover: [2.4, 1.2] };
+    }
+    case 'concrete-panel': {
+      // 1.2 × 2.4 m pours with tie holes
+      const W = 256, H = 512;
+      const [c, ctx] = makeCanvas(W, H);
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, W, H);
+      clouds(ctx, W, H, r, 'rgba(50,48,44,0.6)', 22, 0.13, [30, 120]);
+      clouds(ctx, W, H, r, 'rgba(255,255,255,0.7)', 16, 0.12, [30, 110]);
+      speckle(ctx, W, H, r, 6, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.34)';
+      ctx.fillRect(0, 0, W, 2);
+      ctx.fillRect(0, 0, 2, H);
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+      ctx.fillRect(0, 2, W, 1);
+      ctx.fillRect(2, 0, 1, H);
+      for (const hx of [W * 0.25, W * 0.75])
+        for (const hy of [H * 0.125, H * 0.375, H * 0.625, H * 0.875]) {
+          const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, 5);
+          g.addColorStop(0, 'rgba(0,0,0,0.55)');
+          g.addColorStop(0.7, 'rgba(0,0,0,0.3)');
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(hx - 6, hy - 6, 12, 12);
+        }
+      return { canvas: c, cover: [1.2, 2.4] };
+    }
+    case 'tile-large': {
+      const W = 512, H = 512;
+      const c = paintCourses({
+        W, H, cols: 1, rows: 2, base, joint: mix(base, '#000000', 0.4), jointPx: 3, vary: 0.04, bond: 'stack', relief: 0, seed,
+        unit: (ctx, x, y, w, h, rr) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, w, h);
+          ctx.clip();
+          for (let k = 0; k < 7; k++) {
+            const gx = x + rr() * w, gy = y + rr() * h, rad = 60 + rr() * 160;
+            const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, rad);
+            g.addColorStop(0, rr() < 0.55 ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.07)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+          }
+          ctx.restore();
+        },
+      });
+      return { canvas: c, cover: [1.2, 1.2] };
+    }
+    case 'panel-acp': {
+      const W = 256, H = 256;
+      const [c, ctx] = makeCanvas(W, H);
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, mix(base, '#ffffff', 0.07));
+      g.addColorStop(1, mix(base, '#000000', 0.07));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = mix(base, '#000000', 0.7);
+      ctx.fillRect(0, 0, W, 3);
+      ctx.fillRect(0, 0, 3, H);
+      ctx.fillStyle = 'rgba(255,255,255,0.16)';
+      ctx.fillRect(3, 3, W - 3, 1);
+      ctx.fillRect(3, 3, 1, H - 3);
+      return { canvas: c, cover: [1.2, 1.2] };
+    }
+    case 'metal-seam': {
+      const W = 128, H = 64;
+      const [c, ctx] = makeCanvas(W, H);
+      const g = ctx.createLinearGradient(0, 0, W, 0);
+      g.addColorStop(0, mix(base, '#ffffff', 0.05));
+      g.addColorStop(0.5, base);
+      g.addColorStop(1, mix(base, '#000000', 0.08));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = mix(base, '#ffffff', 0.35);
+      ctx.fillRect(0, 0, 3, H);
+      ctx.fillStyle = mix(base, '#000000', 0.55);
+      ctx.fillRect(3, 0, 4, H);
+      return { canvas: c, cover: [0.4, 0.6] };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Painted facade material, or null for one that is a plain colour (paint). */
+export function paintCladding(id: string, color: string): Painted | null {
+  const key = `cladding|${id}|${color}`;
+  if (canvasCache.has(key)) return canvasCache.get(key)!;
+  let p: Painted | null = null;
+  try {
+    p = paintCladdingRaw(id, color, hashString(key));
+  } catch (e) {
+    console.warn('[HouseViewer] cladding paint failed, using flat colour', e);
+  }
+  if (p) canvasCache.set(key, p);
+  return p;
+}
+
+// ------------------------------------------------------------------------------------------------ light on surfaces
+// Greyscale "how much light lands here" pictures, drawn additively over walls and ground at night and tinted by the
+// colour of the lamps. Analytic, so they are smooth at any size.
+
+export type GlowKind = 'updown' | 'up' | 'pool' | 'wash' | 'halo' | 'window';
+
+export function glowTexture(kind: GlowKind): THREE.CanvasTexture {
+  const size: Record<GlowKind, [number, number]> = { updown: [96, 256], up: [96, 256], pool: [128, 128], wash: [4, 128], halo: [64, 64], window: [64, 128] };
+  const [W, H] = size[kind];
+  const [c, ctx] = makeCanvas(W, H);
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  // a beam leaving (cx, cy) along ±y: wider and weaker with distance, gone by `reach`
+  const beam = (dx: number, dy: number, reach: number) => {
+    if (dy <= 0) return 0;
+    const spread = 5 + dy * 0.36;
+    const side = Math.exp(-(dx * dx) / (spread * spread));
+    const along = 1 / (1 + (dy / (reach * 0.22)) ** 2);
+    const end = Math.max(0, 1 - dy / reach);
+    return side * along * end * end * 1.6;
+  };
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let v = 0;
+      if (kind === 'updown') {
+        const dx = x - W / 2 + 0.5, dy = y - H / 2 + 0.5;
+        v = beam(dx, dy, H / 2) + beam(dx, -dy, H / 2);
+      } else if (kind === 'up') {
+        // canvas y runs down: the lamp sits at the bottom edge
+        v = beam(x - W / 2 + 0.5, H - y, H) * 1.1;
+      } else if (kind === 'pool') {
+        const rr = Math.hypot(x - W / 2 + 0.5, y - H / 2 + 0.5) / (W / 2);
+        v = rr >= 1 ? 0 : (1 - rr) ** 2 * (0.55 + 0.45 * Math.exp(-rr * rr * 8));
+      } else if (kind === 'wash') {
+        const t = y / (H - 1);
+        v = (1 - t) ** 2.2;
+      } else if (kind === 'halo') {
+        const rr = Math.hypot(x - W / 2 + 0.5, y - H / 2 + 0.5) / (W / 2);
+        v = rr >= 1 ? 0 : Math.exp(-rr * rr * 9) * (1 - rr);
+      } else {
+        // a lit room behind a sheer curtain: soft folds, brighter toward the ceiling light
+        const t = y / (H - 1);
+        const fold = 0.9 + 0.1 * Math.sin((x / W) * Math.PI * 10) * Math.sin((x / W) * Math.PI * 3.1 + 1);
+        v = (0.62 + 0.38 * Math.exp(-((t - 0.28) ** 2) * 7)) * fold;
+      }
+      const b = Math.max(0, Math.min(255, Math.round(v * 255)));
+      const i = (y * W + x) * 4;
+      d[i] = d[i + 1] = d[i + 2] = b;
+      d[i + 3] = 255;
+    }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = kind === 'wash' ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  t.wrapT = THREE.ClampToEdgeWrapping;
+  t.minFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+  return t;
+}

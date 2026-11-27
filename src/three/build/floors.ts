@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import type { Vec2 } from '@/types/house';
 import { Batch, BatchSet, polyFace, polyFaceDiff, polySides } from '../core/batch';
 import { offsetPoly, pointInPoly } from '../core/geo';
+import { zoneCladding } from './facade';
 import type { LevelModel, RoomModel } from './model';
 import { wallMatrix, type BuildCtx } from './walls';
 
@@ -96,7 +97,7 @@ export function buildFloors(ctx: BuildCtx, lm: LevelModel, finishGroup: THREE.Gr
 
   if (lm.onGrade) {
     // solid plinth from the ground up to FFL, in the plinth stone colour
-    const pm = mats.solid(model.spec.exterior?.plinth ?? '#6f6a62', 0.88);
+    const pm = mats.cladding(zoneCladding(ctx.facade, 'plinth'), ctx.facade.images, false);
     const b = fill.get(pm);
     const outer = offsetPoly(fp, PLINTH_OUT);
     polyFaceDiff(b, outer, sunken.map((r) => r.poly), elev - FLOOR_GAP, true);
@@ -122,7 +123,7 @@ export function buildFloors(ctx: BuildCtx, lm: LevelModel, finishGroup: THREE.Gr
     rcc.flush(rccGroup, { name: 'slab', data: { rcc: 'slab' } });
 
     // slab band on the elevation
-    const bm = mats.paint(model.spec.exterior?.band ?? '#8a6a4f', false, 0.85);
+    const bm = mats.cladding(zoneCladding(ctx.facade, 'band'), ctx.facade.images, false);
     const bb = band.get(bm);
     const outer = offsetPoly(fp, BAND_OUT);
     polySides(bb, outer, y0 - 0.012, elev, true);

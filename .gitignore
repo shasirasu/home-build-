@@ -1,6 +1,6 @@
 node_modules
 dist
 .vercel
-.env
 .env*.local
-!.env.example
+/home build 3d/
+/__MACOSX/

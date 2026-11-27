@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowRight, BrickWall, DoorClosed, DoorOpen, Footprints, Hand, Layers, Maximize, MousePointer2, Plus, Redo2, Ruler, ScanLine, Square, Trash2, Undo2, AppWindow } from 'lucide-react';
+import { ArrowRight, BrickWall, DoorClosed, DoorOpen, Footprints, Hand, Layers, Maximize, MousePointer2, Plus, Redo2, Ruler, ScanLine, Square, Trash2, Undo2, AppWindow, Save } from 'lucide-react';
 import type { Level, Opening, Room, RoomType, Vec2 } from '@/types/house';
-import { SAMPLE_ID, useProject, useStore } from '@/lib/store';
+import { SAMPLE_ID, storageProblem, useProject, useStore } from '@/lib/store';
 import { parseRoute } from './planRoute';
 import { useUnderlay } from './useUnderlay';
 import { PlanCanvas, type PlanSel, type Tool } from './PlanCanvas';
@@ -38,7 +38,7 @@ export default function PlanEditor() {
   const redo = useStore((s) => s.redo);
   const spec = project.spec;
   const [levelIndex, setLevelIndex] = useState(() => Math.max(0, spec.levels.findIndex((l) => l.id === parseRoute().level)));
-  const [tool, setTool] = useState<Tool>('select');
+  const [tool, setTool] = useState<Tool>(() => !spec.underlay && !spec.levels.some((l) => l.walls.length) ? 'wall' : 'select');
   const [sel, setSel] = useState<PlanSel>(null);
   const [thickness, setThickness] = useState(DEFAULTS.wall9);
   const [opacity, setOpacity] = useState(0.55);
@@ -111,6 +111,13 @@ export default function PlanEditor() {
     go('#/studio');
   };
 
+  const save = () => {
+    // Zustand persist writes to local storage on every edit; setting the current state
+    // again provides an explicit Save action for users who expect one.
+    useStore.setState((s) => ({ ...s }));
+    if (storageProblem.full) alert('The browser could not save this plan. Free up browser storage and try again.');
+  };
+
   // Read the plan straight from the PDF's own linework (no AI): walls, doors, rooms, stairs, scale.
   const canRead = spec.underlay?.kind === 'pdf';
   const runRead = async () => {
@@ -157,6 +164,7 @@ export default function PlanEditor() {
           <Button size="sm" variant="quiet" onClick={addLevel} title="Add a floor on top"><Plus /> Floor</Button>
         </div>
         <div className="flex items-center gap-1">
+          <Button size="sm" variant="secondary" onClick={save} title="Save this plan in this browser"><Save /> Save</Button>
           <Button variant="quiet" size="icon" onClick={undo} aria-label="Undo" title="Undo (⌘Z)"><Undo2 /></Button>
           <Button variant="quiet" size="icon" onClick={redo} aria-label="Redo" title="Redo (⇧⌘Z)"><Redo2 /></Button>
           {canRead && (
